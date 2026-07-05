@@ -1,0 +1,10 @@
+{
+  "status": "success",
+  "id": "AABBCCDDEEFF",
+  "depth_to_water": 136.416,
+  "timestamp": "2026-07-03 22:43:10",
+  "reading_id": 4747366,
+  "unique_id": 1783132889,
+  "flow_event_status": "completed",
+  "accumulated_gallons": 8.552385345101357
+}

@@ -1,0 +1,84 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to imbrr",
+        "description": "Enter the email address and password you use to sign in at www.imbrr.com. Credentials are stored by Home Assistant and only ever sent to imbrr.",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
+      },
+      "select_devices": {
+        "title": "Select devices",
+        "description": "Choose which imbrr devices to add to Home Assistant.",
+        "data": {
+          "devices": "Devices"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate imbrr",
+        "description": "The password for {email} no longer works. Enter the current password.",
+        "data": {
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid email or password.",
+      "cannot_connect": "Could not connect to www.imbrr.com.",
+      "no_devices": "No imbrr devices were found on this account.",
+      "unknown": "Unexpected error. See the Home Assistant logs for details."
+    },
+    "abort": {
+      "already_configured": "This imbrr account is already configured.",
+      "reauth_successful": "Re-authentication was successful."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "imbrr options",
+        "description": "Polling and real-time options. The backfill window is only used the first time the integration is set up.",
+        "data": {
+          "scan_interval": "Update interval (seconds)",
+          "fast_polling_enabled": "Poll faster while water is flowing",
+          "fast_scan_interval": "Fast update interval (seconds)",
+          "mqtt_enabled": "Use MQTT for real-time updates",
+          "mqtt_topic": "MQTT topic pattern",
+          "device_timezone": "Device timezone (blank = Home Assistant timezone)",
+          "backfill_days": "History backfill window (days, first setup only)"
+        }
+      }
+    },
+    "error": {
+      "invalid_timezone": "Unknown timezone name. Use an IANA name like America/New_York."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "depth_to_water": { "name": "Depth to water" },
+      "flow_rate": { "name": "Flow rate" },
+      "water_temperature": { "name": "Water temperature" },
+      "pressure": { "name": "Pressure" },
+      "current_event_gallons": { "name": "Current event water" },
+      "total_water": { "name": "Total water" },
+      "last_reading": { "name": "Last reading" },
+      "last_pump_cycle_gpm": { "name": "Last pump cycle rate" },
+      "last_pump_cycle_gallons": { "name": "Last pump cycle water" },
+      "last_pump_cycle_duration": { "name": "Last pump cycle duration" },
+      "last_pump_cycle_start_psi": { "name": "Last pump cycle start pressure" },
+      "last_pump_cycle_stop_psi": { "name": "Last pump cycle stop pressure" },
+      "storage_gallons": { "name": "Storage" },
+      "storage_percent": { "name": "Storage percentage" },
+      "usage_24h": { "name": "Usage last 24 hours" },
+      "usage_31d": { "name": "Usage last 31 days" },
+      "cistern_temperature": { "name": "Water temperature" },
+      "cistern_pressure": { "name": "Pressure" },
+      "last_connected": { "name": "Last connected" }
+    },
+    "binary_sensor": {
+      "flow_active": { "name": "Flow active" }
+    }
+  }
+}

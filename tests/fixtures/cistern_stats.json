@@ -1,0 +1,11 @@
+{
+  "status": "success",
+  "id": "AABBCCDDEEFF",
+  "storage_gallons": 1250.5,
+  "storage_percent": 75,
+  "24_hour_usage": 45.2,
+  "31_day_usage": 1250.8,
+  "last_temp": 68.5,
+  "last_pressure": 45.2,
+  "last_connected": "2024-01-15 14:30:25"
+}

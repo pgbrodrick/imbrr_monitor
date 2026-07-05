@@ -1,0 +1,26 @@
+# Local-only developer material: credentials (login.txt), vendor reference
+# docs, and live-test tooling. Never publish.
+developer_reference/
+
+# Secrets - belt and suspenders in case login.txt ever moves
+login.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Editors / OS / tooling config
+.DS_Store
+.idea/
+.vscode/
+.claude/

@@ -1,0 +1,6 @@
+pytest>=8.0
+pytest-homeassistant-custom-component
+pytest-asyncio
+pytest-cov
+aioresponses
+ruff
