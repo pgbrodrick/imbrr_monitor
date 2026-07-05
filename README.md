@@ -1,0 +1,141 @@
+# imbrr for Home Assistant
+
+A [HACS](https://hacs.xyz) custom integration for [imbrr](https://www.imbrr.com) well and cistern water-monitoring systems (IMB-WMS1).
+
+Unlike a simple "latest value" poller, this integration is built to preserve the **complete data profile through time**:
+
+- During pump/flow events your imbrr sensor records a reading every ~5 seconds. The integration detects new data and pulls **every raw reading** from the imbrr cloud — not just whatever value happened to be current at poll time. This works even across Home Assistant restarts or extended downtime: missed readings are backfilled automatically.
+- A persistent **Total water** sensor accumulates every gallon ever pumped (verified to match imbrr's own per-event accounting exactly), ready to use on Home Assistant's **Water dashboard**.
+- Hourly **long-term statistics** (mean/min/max depth-to-water, flow, pressure, and temperature, plus hourly water usage) are written into Home Assistant's recorder with the readings' true timestamps, so your history graphs reflect what actually happened between polls. On first setup, the last 30 days (configurable) of history are imported.
+- Optional **MQTT real-time updates**: if your imbrr device is connected to your local MQTT broker, pushed readings update the entities instantly between cloud polls.
+
+Each imbrr unit appears as its own device in Home Assistant.
+
+## Installation
+
+### HACS (recommended)
+
+1. In Home Assistant, open **HACS**.
+2. Click the three-dot menu (top right) → **Custom repositories**.
+3. Add this repository's URL, with type **Integration**.
+4. Search for **imbrr** in HACS and click **Download**.
+5. Restart Home Assistant.
+
+### Manual
+
+1. Download `imbrr.zip` from the latest [release](../../releases) (or copy the `custom_components/imbrr` folder from this repository).
+2. Extract/copy it to `config/custom_components/imbrr` in your Home Assistant configuration directory.
+3. Restart Home Assistant.
+
+## Setup
+
+1. Go to **Settings → Devices & services → Add integration** and search for **imbrr**.
+2. Enter the **email address and password** you use to sign in at www.imbrr.com.
+   Your credentials are stored by Home Assistant's config-entry storage and are only ever sent to imbrr's servers.
+3. The integration discovers the devices on your account — select the ones you want and finish.
+
+On first setup the integration imports the last 30 days of history (configurable) into long-term statistics; this can take a minute. The **Total water** counter also starts from this window — it reflects water pumped since (backfill window before) install, not since the device was manufactured.
+
+## Entities
+
+### Well devices
+
+| Entity | Description |
+|---|---|
+| Depth to water | Water level below the sensor (ft) |
+| Flow rate | Live pumping rate (gal/min); 0 when idle |
+| Water temperature | Water temperature (°F) |
+| Pressure | Line pressure (psi) |
+| Current event water | Gallons in the flow event currently in progress / most recently completed |
+| **Total water** | Lifetime accumulated gallons (persistent; Water-dashboard ready) |
+| Flow active | On while water is flowing |
+| Last reading | Timestamp of the most recent reading (diagnostic) |
+| Last pump cycle rate / water / duration / start & stop pressure | Summary of the most recent pump cycle (diagnostic) |
+
+### Cistern devices
+
+Everything above (as applicable), plus: Storage (gal), Storage percentage, Usage last 24 hours, Usage last 31 days, Water temperature, Pressure, and Last connected.
+
+### Long-term statistics
+
+In addition to entities, the integration records external statistics you can add to any statistics graph card and to the Water dashboard, under IDs like:
+
+- `imbrr:<serial>_depth_to_water`, `imbrr:<serial>_flow`, `imbrr:<serial>_psi`, `imbrr:<serial>_temp` (hourly mean/min/max)
+- `imbrr:<serial>_gallons` (hourly water usage with cumulative total)
+
+These carry the true reading timestamps, so history is accurate even for events that happened between polls or while Home Assistant was off.
+
+## Water dashboard
+
+**Settings → Dashboards → Energy → Water consumption**: add either the **Total water** sensor or the `imbrr:<serial>_gallons` statistic as a water source.
+
+## Options
+
+**Settings → Devices & services → imbrr → Configure**:
+
+| Option | Default | Description |
+|---|---|---|
+| Update interval | 60 s | How often the imbrr cloud is polled |
+| Poll faster while water is flowing | on | Temporarily poll at the fast interval during flow events |
+| Fast update interval | 15 s | Poll rate while a flow event is active |
+| Use MQTT for real-time updates | off | Merge readings pushed to your local MQTT broker (see below) |
+| MQTT topic pattern | `imbrr/#` | Wildcard the integration subscribes to |
+| Device timezone | (blank) | Timezone of the imbrr cloud timestamps; blank uses Home Assistant's |
+| History backfill window | 30 days | How much history to import — only used on first setup |
+
+## MQTT real-time updates (optional)
+
+The imbrr device itself can publish readings directly to your local MQTT broker. Two things happen when you set this up:
+
+1. The device registers itself via native MQTT discovery, creating its own set of push-updated entities under the MQTT integration.
+2. If you also enable **Use MQTT for real-time updates** in this integration's options, pushed readings (flow, temperature, pressure, depth-to-water) update *this* integration's entities instantly between cloud polls — and a flow push while idle triggers an immediate cloud refresh. All totals and statistics still come exclusively from the cloud data, so nothing is ever double-counted.
+
+To connect the device to your broker:
+
+1. Install and start the **Mosquitto broker** add-on and make sure the **MQTT** integration shows as configured (**Settings → Devices & services**). Anonymous connections are not allowed, so the device needs a real login.
+2. Create a **dedicated Home Assistant user** for the device: **Settings → People → Add person**, name it `imbrr_devices`, toggle **Allow login**, and set the password to `pass1234` (the device's factory defaults) — or pick your own username/password and enter those on the device page in step 4. A dedicated user is strongly recommended over your personal HA login (see the security note below). If the connection is refused, make sure the user is *not* restricted to "local network only" login.
+3. Browse to the device's local setup page: `http://imbrr_<SERIAL>.local/` (lowercase serial works too; use the device's IP address if mDNS doesn't resolve).
+4. In **Host / IP Address**, enter **only the hostname or IP** of your Home Assistant machine — e.g. `homeassistant.local` or `192.168.1.50`. **Do not include a port or `http://`.** In particular, don't append `:8123` (that's HA's web port; the device talks MQTT on port 1883 and adds that automatically).
+5. Enter the username/password from step 2, click **Save MQTT Settings**, and wait a few seconds — the status line should change to **Connected**, and if you go to Settings → Devices → MQTT, you should see the device. 
+
+### MQTT troubleshooting
+
+If the status stays **Disconnected**:
+
+- **Re-open the page and check what was actually saved.** The device stores the full broker URI; if you included a port in the host field it gets saved verbatim. The saved value must end in `:1883` — if you see `:8123` (or anything else), re-enter the bare host/IP and save again.
+- **Verify the broker is reachable**: from any machine on your network, `nc -z <HA-IP> 1883` should report the port open. If not, the Mosquitto add-on isn't running.
+- **Verify the credentials**: the username/password must match an HA user with "Allow login" enabled (or a user defined in the Mosquitto add-on's own configuration). The device's defaults (`imbrr_devices` / `pass1234`) only work if you actually created that user. You can test with `mosquitto_pub -h <HA-IP> -u <user> -P <password> -t test -m hi` from any machine with mosquitto clients installed.
+- After fixing anything on the HA side, click **Save MQTT Settings** once more to force an immediate reconnect.
+
+> **Security note:** the device's local setup page is unauthenticated and will show the stored MQTT password to anyone on your network. Use a dedicated, least-privilege MQTT user for the device — never your own Home Assistant login.
+
+## FAQ
+
+**Why doesn't Total water match my well's true lifetime?**
+It counts from the backfill window at install time forward. imbrr's cloud is still the authoritative record.
+
+**What happens if Home Assistant is off during a flow event?**
+Nothing is lost. On the next poll the integration notices the reading-id watermark advanced, downloads the missed days of raw data, and accounts for every reading exactly once.
+
+**My graphs show a gap right after install.**
+Statistics are hourly; the current hour is only written once it has fully elapsed.
+
+**Timestamps look shifted.**
+imbrr reports timestamps in the device's local timezone. If your Home Assistant timezone differs from the device's, set **Device timezone** in the options.
+
+## Troubleshooting
+
+- **Re-authentication required**: if your imbrr password changes, Home Assistant will prompt you to re-enter it (Settings → Devices & services → imbrr).
+- **Debug logging**: add to `configuration.yaml`:
+
+  ```yaml
+  logger:
+    logs:
+      custom_components.imbrr: debug
+  ```
+
+- **Removing and re-adding** the integration re-runs the backfill; existing external statistics are overwritten going forward. To fully clear old statistics use Developer tools → Statistics, or the `recorder.clear_statistics` action with the `imbrr:<serial>_*` IDs.
+
+## Disclaimer
+
+This is a third-party integration, not affiliated with imbrr. It uses the documented imbrr API v1 plus a few dashboard endpoints for history download, device discovery, and pump-cycle summaries; those may change without notice, in which case the affected features degrade gracefully.
