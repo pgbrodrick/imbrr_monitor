@@ -126,7 +126,7 @@ views:
               - entity: sensor.well_pressure
                 name: Pressure
                 statistic: mean
-                period: 5min
+                period: 5minute
                 line:
                   color: "#fd7e14"
                   width: 2
@@ -151,7 +151,7 @@ views:
               - entity: sensor.well_depth_to_water
                 name: Depth to water
                 statistic: mean
-                period: 5min
+                period: 5minute
                 yaxis: y1
                 line:
                   color: "#4e73df"
@@ -159,7 +159,7 @@ views:
               - entity: sensor.well_flow_rate
                 name: Peak flow
                 statistic: max
-                period: 5min
+                period: 5minute
                 yaxis: y2
                 fill: tozeroy
                 fillcolor: "rgba(28,200,138,0.25)"
