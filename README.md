@@ -79,7 +79,7 @@ These carry the true reading timestamps, so history is accurate even for events 
 | Poll faster while water is flowing | on | Temporarily poll at the fast interval during flow events |
 | Fast update interval | 15 s | Poll rate while a flow event is active |
 | Use MQTT for real-time updates | off | Merge readings pushed to your local MQTT broker (see below) |
-| MQTT topic pattern | `imbrr/#` | Wildcard the integration subscribes to |
+| MQTT topic pattern | `imbrr/+/state` | Topic/wildcard the integration subscribes to |
 | Device timezone | (blank) | Timezone of the imbrr cloud timestamps; blank uses Home Assistant's |
 | History backfill window | 30 days | How much history to import — only used on first setup |
 
@@ -104,9 +104,21 @@ Getting the device onto your broker (above) only creates the device's *own* MQTT
 
 1. **Settings → Devices & services → imbrr → Configure.**
 2. Enable **Use MQTT for real-time updates**.
-3. Set the **MQTT topic pattern** to the wildcard your device publishes under (see the next paragraph), then submit. The integration reloads and subscribes.
+3. Leave the **MQTT topic pattern** at its default `imbrr/+/state` (or set it explicitly to `imbrr/<SERIAL>/state`), then submit. The integration reloads and subscribes.
 
-**Confirm the topic pattern matches your device.** The default (`imbrr/#`) is a starting guess — depending on firmware, your device may publish under a different prefix or as a single JSON payload. To see what it actually sends: **Settings → Devices & services → MQTT → Configure → Listen to a topic**, enter `#`, click **Start listening**, and run some water so the device reports. Note the topics that contain your device serial and set the pattern to cover them. The integration recognizes a reading when the topic's last segment is `flow`, `temperature`, `pressure`, or `depth_to_water` and the payload is a plain number or `{"value": <number>}`; it matches the reading to a device by finding the serial in the topic (or uses the sole device if you only have one). If your device's topics or payloads don't fit that shape, open an issue with a sample so the parser can be adjusted.
+**How the device publishes.** imbrr firmware publishes a single JSON state message to `imbrr/<SERIAL>/state`, for example:
+
+```json
+{"depth_ft":91.56,"temp_f":61.03,"pressure_psi":48.32,"flow_gpm":0.00,"event_gallons":0.000,"flow_event_status":"completed"}
+```
+
+The integration reads `depth_ft`, `temp_f`, `pressure_psi`, `flow_gpm`, `event_gallons`, and `flow_event_status` from that payload and updates the matching entities in real time (the device publishes continuously, so depth/temperature/pressure stay live even when the pump is idle). It attributes the message to a device by finding the serial in the topic, so with one device the default pattern just works.
+
+> **Note:** the pattern must actually match the topic. `imbrr/<SERIAL>` (no trailing segment) does **not** match `imbrr/<SERIAL>/state` — MQTT topic matching is exact unless you use a wildcard. Use `imbrr/+/state`, `imbrr/<SERIAL>/state`, or `imbrr/#`.
+
+If your firmware publishes a different topic or payload shape, capture it (below) and open an issue so the parser can be extended.
+
+To see exactly what your device sends: **Settings → Devices & services → MQTT → Configure → Listen to a topic**, enter `#`, **Start listening**.
 
 **Verify it's actually being used:**
 

@@ -39,4 +39,4 @@ class ImbrrFlowActiveBinarySensor(ImbrrBaseEntity, BinarySensorEntity):
 
     @property
     def is_on(self) -> bool:
-        return self.device_data.flow_in_progress
+        return self.coordinator.is_flow_active(self._serial)

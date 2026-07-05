@@ -24,7 +24,7 @@ DEFAULT_SCAN_INTERVAL = 60  # seconds
 DEFAULT_FAST_SCAN_INTERVAL = 15  # seconds, while a flow event is in progress
 DEFAULT_FAST_POLLING_ENABLED = True
 DEFAULT_MQTT_ENABLED = False
-DEFAULT_MQTT_TOPIC = "imbrr/#"
+DEFAULT_MQTT_TOPIC = "imbrr/+/state"
 DEFAULT_DEVICE_TIMEZONE = ""  # empty = use Home Assistant's timezone
 DEFAULT_BACKFILL_DAYS = 30
 
@@ -52,8 +52,22 @@ STORAGE_VERSION = 1
 STATISTIC_KEYS = ("depth_to_water", "flow", "psi", "temp")
 STATISTIC_GALLONS_KEY = "gallons"
 
-# MQTT topic suffixes recognized by the real-time overlay, mapped to
-# coordinator live-value keys.
+# The imbrr device publishes a single JSON state blob to <prefix>/<serial>/state,
+# e.g. {"depth_ft":91.56,"temp_f":61.03,"pressure_psi":48.32,"flow_gpm":0.0,
+#       "event_gallons":0.0,"flow_event_status":"completed"}.
+# Map its JSON fields to the coordinator's internal live-value keys.
+MQTT_STATE_JSON_MAP = {
+    "depth_ft": "depth_to_water",
+    "temp_f": "temp",
+    "pressure_psi": "psi",
+    "flow_gpm": "flow",
+    "event_gallons": "event_gallons",
+}
+MQTT_STATE_STATUS_FIELD = "flow_event_status"
+
+# Fallback shape: some payloads may instead publish one metric per topic, with
+# the metric name as the last topic segment and a bare-number (or {"value": n})
+# payload.
 MQTT_TOPIC_KEY_MAP = {
     "flow": "flow",
     "flow_rate": "flow",

@@ -130,7 +130,7 @@ SENSOR_DESCRIPTIONS: tuple[ImbrrSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=2,
         icon="mdi:cup-water",
-        value_fn=lambda c, d: d.latest.get("accumulated_gallons"),
+        value_fn=lambda c, d: c.get_live_value(d.device.serial, "event_gallons"),
     ),
     ImbrrSensorDescription(
         key="last_reading",

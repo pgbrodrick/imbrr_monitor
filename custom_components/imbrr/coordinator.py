@@ -21,6 +21,7 @@ accounting source, so pushes can never double count.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -51,6 +52,8 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     MQTT_FRESHNESS_FACTOR,
+    MQTT_STATE_JSON_MAP,
+    MQTT_STATE_STATUS_FIELD,
     MQTT_TOPIC_KEY_MAP,
     PUMP_CYCLE_REFRESH_SECONDS,
     STORAGE_VERSION,
@@ -124,6 +127,7 @@ class ImbrrDeviceData:
     last_pump_cycle: PumpCycle | None = None
     flow_in_progress: bool = False
     mqtt: dict[str, tuple[float, datetime]] = field(default_factory=dict)
+    mqtt_status: tuple[str, datetime] | None = None
 
 
 class ImbrrCoordinator(DataUpdateCoordinator[dict[str, ImbrrDeviceData]]):
@@ -228,7 +232,7 @@ class ImbrrCoordinator(DataUpdateCoordinator[dict[str, ImbrrDeviceData]]):
                 _LOGGER.warning("Update failed for imbrr device %s: %s", device.serial, err)
                 data.available = False
                 last_error = err
-            any_in_progress = any_in_progress or data.flow_in_progress
+            any_in_progress = any_in_progress or self._data_flow_active(data)
 
         if not any_success:
             raise UpdateFailed(f"All imbrr devices failed to update: {last_error}")
@@ -365,39 +369,9 @@ class ImbrrCoordinator(DataUpdateCoordinator[dict[str, ImbrrDeviceData]]):
     def handle_mqtt_message(self, topic: str, payload: str) -> None:
         """Fold a real-time MQTT reading into the device data (display only)."""
         _LOGGER.debug("imbrr MQTT message received on %s: %s", topic, payload)
-        segments = [s for s in topic.split("/") if s]
-        if not segments:
-            return
-        key = MQTT_TOPIC_KEY_MAP.get(segments[-1].lower())
-        if key is None:
-            _LOGGER.debug(
-                "imbrr MQTT: ignoring %s (last segment %r is not a recognized "
-                "metric; expected one of %s)",
-                topic,
-                segments[-1],
-                sorted(MQTT_TOPIC_KEY_MAP),
-            )
-            return
 
-        value = _parse_mqtt_payload(payload)
-        if value is None:
-            _LOGGER.debug(
-                "imbrr MQTT: ignoring %s (payload %r is not a number or "
-                '{"value": <number>})',
-                topic,
-                payload,
-            )
-            return
-
-        topic_lower = topic.lower()
-        matches = [
-            d for d in self.devices if d.serial.lower() in topic_lower
-        ]
-        if len(matches) == 1:
-            serial = matches[0].serial
-        elif not matches and len(self.devices) == 1:
-            serial = self.devices[0].serial
-        else:
+        serial = self._match_mqtt_device(topic)
+        if serial is None:
             _LOGGER.debug(
                 "imbrr MQTT: ignoring %s (no serial in topic and %d devices "
                 "configured, so cannot attribute the reading)",
@@ -406,17 +380,63 @@ class ImbrrCoordinator(DataUpdateCoordinator[dict[str, ImbrrDeviceData]]):
             )
             return
 
-        _LOGGER.debug(
-            "imbrr MQTT: applied %s=%s to device %s", key, value, serial
-        )
+        readings, status = _parse_mqtt_payload(topic, payload)
+        if not readings and status is None:
+            _LOGGER.debug(
+                "imbrr MQTT: ignoring %s (no recognized readings in payload %r)",
+                topic,
+                payload,
+            )
+            return
+
         data = self._device_data[serial]
-        data.mqtt[key] = (value, dt_util.utcnow())
+        was_active = self._data_flow_active(data)
+        now = dt_util.utcnow()
+        for reading_key, reading_value in readings.items():
+            data.mqtt[reading_key] = (reading_value, now)
+        if status is not None:
+            data.mqtt_status = (status, now)
+        _LOGGER.debug(
+            "imbrr MQTT: applied %s%s to device %s",
+            readings,
+            f" status={status}" if status is not None else "",
+            serial,
+        )
         self.async_set_updated_data(dict(self._device_data))
 
-        # A flow push while we think the well is idle means an event just
-        # started: refresh now instead of waiting out the base interval.
-        if key == "flow" and value > 0 and not data.flow_in_progress:
+        # A reading that shows the well is now active while we thought it was
+        # idle means an event just started: refresh now instead of waiting out
+        # the base interval.
+        flow = readings.get("flow")
+        started = (self._data_flow_active(data) and not was_active) or (
+            flow is not None and flow > 0 and not was_active
+        )
+        if started:
             self.hass.async_create_task(self.async_request_refresh())
+
+    def _match_mqtt_device(self, topic: str) -> str | None:
+        """Attribute an MQTT topic to a device by serial (or sole device)."""
+        topic_lower = topic.lower()
+        matches = [d for d in self.devices if d.serial.lower() in topic_lower]
+        if len(matches) == 1:
+            return matches[0].serial
+        if not matches and len(self.devices) == 1:
+            return self.devices[0].serial
+        return None
+
+    def _data_flow_active(self, data: ImbrrDeviceData) -> bool:
+        """Whether the well is flowing, preferring a fresh MQTT status."""
+        if data.mqtt_status is not None:
+            status, received = data.mqtt_status
+            max_age = self._base_interval * MQTT_FRESHNESS_FACTOR
+            if (dt_util.utcnow() - received).total_seconds() <= max_age:
+                return status == "in_progress"
+        return data.flow_in_progress
+
+    def is_flow_active(self, serial: str) -> bool:
+        """Public flow-active state for a device (used by the binary sensor)."""
+        data = self.data.get(serial) if self.data else self._device_data.get(serial)
+        return self._data_flow_active(data) if data is not None else False
 
     def get_live_value(self, serial: str, key: str) -> float | None:
         """Return the freshest value for a live metric (MQTT beats polling)."""
@@ -432,28 +452,77 @@ class ImbrrCoordinator(DataUpdateCoordinator[dict[str, ImbrrDeviceData]]):
         if key == "depth_to_water":
             depth = data.latest.get("depth_to_water")
             return float(depth) if depth is not None else data.live.get(key)
+        if key == "event_gallons":
+            gallons = data.latest.get("accumulated_gallons")
+            return float(gallons) if gallons is not None else data.live.get(key)
         return data.live.get(key)
 
 
-def _parse_mqtt_payload(payload: str) -> float | None:
-    """Parse an MQTT payload that is either a bare number or {"value": n}."""
+def _coerce_float(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
+def _parse_mqtt_payload(
+    topic: str, payload: str
+) -> tuple[dict[str, float], str | None]:
+    """Parse an MQTT payload into ``({metric: value}, flow_status)``.
+
+    Handles the imbrr device's JSON state blob
+    (``{"depth_ft": ..., "flow_gpm": ..., "flow_event_status": ...}``) and,
+    as a fallback, a single-metric topic whose last segment names the metric
+    with a bare-number or ``{"value": n}`` payload.
+    """
     text = (payload or "").strip()
     if not text:
-        return None
-    try:
-        return float(text)
-    except ValueError:
-        pass
-    import json
+        return {}, None
 
-    try:
-        decoded = json.loads(text)
-    except ValueError:
+    if text.startswith("{"):
+        try:
+            decoded = json.loads(text)
+        except ValueError:
+            return {}, None
+        if not isinstance(decoded, dict):
+            return {}, None
+
+        readings: dict[str, float] = {}
+        for json_key, internal_key in MQTT_STATE_JSON_MAP.items():
+            value = _coerce_float(decoded.get(json_key))
+            if value is not None:
+                readings[internal_key] = value
+
+        status = decoded.get(MQTT_STATE_STATUS_FIELD)
+        status = status if isinstance(status, str) and status else None
+
+        if not readings and status is None:
+            # A single-metric topic may still carry {"value": n} / {"state": n}.
+            metric = _topic_metric(topic)
+            if metric is not None:
+                for field_name in ("value", "state"):
+                    value = _coerce_float(decoded.get(field_name))
+                    if value is not None:
+                        readings[metric] = value
+                        break
+        return readings, status
+
+    metric = _topic_metric(topic)
+    if metric is not None:
+        value = _coerce_float(text)
+        if value is not None:
+            return {metric: value}, None
+    return {}, None
+
+
+def _topic_metric(topic: str) -> str | None:
+    segments = [s for s in topic.split("/") if s]
+    if not segments:
         return None
-    if isinstance(decoded, (int, float)):
-        return float(decoded)
-    if isinstance(decoded, dict):
-        for field_name in ("value", "state"):
-            if isinstance(decoded.get(field_name), (int, float)):
-                return float(decoded[field_name])
-    return None
+    return MQTT_TOPIC_KEY_MAP.get(segments[-1].lower())

@@ -216,6 +216,58 @@ async def test_ledger_persists_via_store(hass, mock_config_entry) -> None:
 # MQTT overlay
 # ----------------------------------------------------------------------
 
+# The device's real JSON state blob, captured live from imbrr/<serial>/state.
+STATE_TOPIC = f"imbrr/{TEST_SERIAL}/state"
+STATE_PAYLOAD_IDLE = (
+    '{"depth_ft":91.56,"temp_f":61.03,"pressure_psi":48.32,'
+    '"flow_gpm":0.00,"event_gallons":0.000,"flow_event_status":"completed"}'
+)
+STATE_PAYLOAD_FLOWING = (
+    '{"depth_ft":120.4,"temp_f":57.6,"pressure_psi":45.1,'
+    '"flow_gpm":5.20,"event_gallons":3.140,"flow_event_status":"in_progress"}'
+)
+
+
+async def test_mqtt_json_state_blob_overlays_all_metrics(
+    hass, mock_config_entry
+) -> None:
+    api = make_mock_api()
+    api.async_get_latest_depth.return_value = make_latest_depth(reading_id=0)
+    coordinator = await make_coordinator(hass, mock_config_entry, api)
+    coordinator.async_set_updated_data(await coordinator._async_update_data())
+
+    coordinator.handle_mqtt_message(STATE_TOPIC, STATE_PAYLOAD_IDLE)
+
+    assert coordinator.get_live_value(TEST_SERIAL, "depth_to_water") == 91.56
+    assert coordinator.get_live_value(TEST_SERIAL, "temp") == 61.03
+    assert coordinator.get_live_value(TEST_SERIAL, "psi") == 48.32
+    assert coordinator.get_live_value(TEST_SERIAL, "flow") == 0.0
+    assert coordinator.get_live_value(TEST_SERIAL, "event_gallons") == 0.0
+    # flow_event_status "completed" => not active
+    assert coordinator.is_flow_active(TEST_SERIAL) is False
+
+
+async def test_mqtt_json_state_sets_flow_active_and_refreshes(
+    hass, mock_config_entry
+) -> None:
+    api = make_mock_api()
+    api.async_get_latest_depth.return_value = make_latest_depth(
+        reading_id=0, status="completed"
+    )
+    coordinator = await make_coordinator(hass, mock_config_entry, api)
+    coordinator.async_set_updated_data(await coordinator._async_update_data())
+    assert coordinator.is_flow_active(TEST_SERIAL) is False
+    api.async_get_latest_depth.reset_mock()
+
+    coordinator.handle_mqtt_message(STATE_TOPIC, STATE_PAYLOAD_FLOWING)
+    await hass.async_block_till_done()
+
+    assert coordinator.get_live_value(TEST_SERIAL, "flow") == 5.2
+    assert coordinator.get_live_value(TEST_SERIAL, "event_gallons") == pytest.approx(3.14)
+    # MQTT status flips flow-active instantly, and a just-started event refreshes.
+    assert coordinator.is_flow_active(TEST_SERIAL) is True
+    assert api.async_get_latest_depth.await_count >= 1
+
 
 async def test_mqtt_overlay_updates_live_value(hass, mock_config_entry) -> None:
     api = make_mock_api()
