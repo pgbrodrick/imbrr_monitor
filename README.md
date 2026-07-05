@@ -17,7 +17,7 @@ Each imbrr unit appears as its own device in Home Assistant.
 
 1. In Home Assistant, open **HACS**.
 2. Click the three-dot menu (top right) → **Custom repositories**.
-3. Add this repository's URL, with type **Integration**.
+3. Add pgbrodrick/imbrr_monitor, with type **Integration**.
 4. Search for **imbrr** in HACS and click **Download**.
 5. Restart Home Assistant.
 
