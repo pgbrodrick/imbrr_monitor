@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Connect to imbrr",
-        "description": "Enter the email address and password you use to sign in at www.imbrr.com. Credentials are stored by Home Assistant and only ever sent to imbrr.",
+        "description": "Enter the email address and password for your imbrr account. Credentials are stored by Home Assistant and only ever sent to imbrr.",
         "data": {
           "email": "Email",
           "password": "Password"
@@ -26,7 +26,7 @@
     },
     "error": {
       "invalid_auth": "Invalid email or password.",
-      "cannot_connect": "Could not connect to www.imbrr.com.",
+      "cannot_connect": "Could not connect to the imbrr service.",
       "no_devices": "No imbrr devices were found on this account.",
       "unknown": "Unexpected error. See the Home Assistant logs for details."
     },

@@ -23,3 +23,7 @@ jobs:
       - uses: hacs/action@main
         with:
           category: integration
+          # imbrr is not (yet) in the home-assistant/brands repository.
+          # Remove this once a logo has been submitted and merged there:
+          # https://github.com/home-assistant/brands
+          ignore: brands
