@@ -3,15 +3,9 @@
 # =============================================================================
 #
 # PREREQUISITES
-#   1. The Plotly Graph Card (HACS → Frontend → "Plotly Graph Card" by dbuezas).
-#      The glance / gauge / entities / conditional cards are built in.
-#   2. A weekly water meter helper for the "resets weekly" graph. Add to
-#      configuration.yaml (or make an equivalent UI helper) and restart:
-#
-#          utility_meter:
-#            well_weekly_water:
-#              source: sensor.well_total_water
-#              cycle: weekly
+#   The Plotly Graph Card (HACS → Frontend → "Plotly Graph Card" by dbuezas).
+#   The glance / gauge / entities / conditional cards are built in. No helpers
+#   needed — the daily cumulative graph integrates flow inside the card.
 #
 # ENTITY NAMES
 #   This assumes your imbrr device is named "Well", giving entity ids like
@@ -126,13 +120,13 @@ views:
           # Pressure through time (hourly long-term statistics = includes backfill).
           - type: custom:plotly-graph
             title: Pressure history
-            hours_to_show: 168
+            hours_to_show: 48
             refresh_interval: 60
             entities:
               - entity: sensor.well_pressure
                 name: Pressure
                 statistic: mean
-                period: hour
+                period: 5min
                 line:
                   color: "#fd7e14"
                   width: 2
@@ -151,13 +145,13 @@ views:
           # Coupled water depth (left axis) and use / flow rate (right axis).
           - type: custom:plotly-graph
             title: Water depth & use
-            hours_to_show: 168
+            hours_to_show: 48
             refresh_interval: 60
             entities:
               - entity: sensor.well_depth_to_water
                 name: Depth to water
                 statistic: mean
-                period: hour
+                period: 5min
                 yaxis: y1
                 line:
                   color: "#4e73df"
@@ -165,7 +159,7 @@ views:
               - entity: sensor.well_flow_rate
                 name: Peak flow
                 statistic: max
-                period: hour
+                period: 5min
                 yaxis: y2
                 fill: tozeroy
                 fillcolor: "rgba(28,200,138,0.25)"
@@ -180,27 +174,52 @@ views:
               margin: { t: 30, l: 52, r: 52, b: 40 }
               legend: { orientation: h, y: 1.15 }
               xaxis: { gridcolor: "rgba(255,255,255,0.08)" }
-              yaxis: { title: Depth, gridcolor: "rgba(255,255,255,0.08)" }
+              # Depth axis is reversed so the water surface reads intuitively:
+              # 0 (surface) at the top, deeper water lower down.
+              yaxis:
+                title: Depth
+                autorange: reversed
+                gridcolor: "rgba(255,255,255,0.08)"
               yaxis2:
                 title: Flow
                 overlaying: y
                 side: right
                 showgrid: false
 
-          # Cumulative water use that resets every week (utility_meter helper).
+          # Cumulative water use, integrated from flow in-card and reset each
+          # midnight. No helper needed — the fn filter sums flow * elapsed
+          # minutes (flow is per-minute, so the result is in the flow sensor's
+          # volume unit) and zeroes the running total when the calendar day
+          # changes. Over a week you get one sawtooth per day.
           - type: custom:plotly-graph
-            title: Weekly water use (resets weekly)
-            hours_to_show: 336
+            title: Water use per day (cumulative, resets at midnight)
+            hours_to_show: 48
             refresh_interval: 300
             entities:
-              - entity: sensor.well_weekly_water
-                name: This week
+              - entity: sensor.well_flow_rate
+                name: Cumulative water
                 fill: tozeroy
                 fillcolor: "rgba(54,185,204,0.2)"
                 line:
                   color: "#36b9cc"
                   width: 2
-                  shape: hv
+                filters:
+                  - resample: 5m
+                  - fn: |
+                      ({ xs, ys }) => {
+                        let cumulative = 0;
+                        let last = null;
+                        const out = [];
+                        for (let i = 0; i < xs.length; i++) {
+                          const t = new Date(xs[i]);
+                          if (last && t.getDate() !== last.getDate()) cumulative = 0;
+                          const dtMin = last ? (t - last) / 60000 : 0;
+                          cumulative += (ys[i] || 0) * dtMin;
+                          out.push(cumulative);
+                          last = t;
+                        }
+                        return { xs, ys: out };
+                      }
             layout:
               paper_bgcolor: "rgba(0,0,0,0)"
               plot_bgcolor: "rgba(0,0,0,0)"
@@ -208,7 +227,7 @@ views:
                 color: "#e1e1e1"
               margin: { t: 30, l: 52, r: 20, b: 40 }
               xaxis: { gridcolor: "rgba(255,255,255,0.08)" }
-              yaxis: { title: Gallons, gridcolor: "rgba(255,255,255,0.08)" }
+              yaxis: { title: Volume, gridcolor: "rgba(255,255,255,0.08)" }
 
       # ------------------------------------------------------ Pump cycles & totals
       - type: grid
@@ -238,9 +257,6 @@ views:
               - entity: sensor.well_total_water
                 name: Total water (lifetime)
                 icon: mdi:cup-water
-              - entity: sensor.well_weekly_water
-                name: Water used this week
-                icon: mdi:calendar-week
               - entity: sensor.well_current_event_water
                 icon: mdi:water-plus
               - entity: sensor.well_water_temperature
