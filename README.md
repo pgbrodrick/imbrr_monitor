@@ -98,6 +98,29 @@ To connect the device to your broker:
 4. In **Host / IP Address**, enter **only the hostname or IP** of your Home Assistant machine — e.g. `homeassistant.local` or `192.168.1.50`. **Do not include a port or `http://`.** In particular, don't append `:8123` (that's HA's web port; the device talks MQTT on port 1883 and adds that automatically).
 5. Enter the username/password from step 2, click **Save MQTT Settings**, and wait a few seconds — the status line should change to **Connected**, and if you go to Settings → Devices → MQTT, you should see the device. 
 
+### Connect MQTT to the integration
+
+Getting the device onto your broker (above) only creates the device's *own* MQTT-discovery entities under the MQTT integration. To have **this integration** use those real-time readings for its entities, you have to turn MQTT on in its options — it is **off by default**:
+
+1. **Settings → Devices & services → imbrr → Configure.**
+2. Enable **Use MQTT for real-time updates**.
+3. Set the **MQTT topic pattern** to the wildcard your device publishes under (see the next paragraph), then submit. The integration reloads and subscribes.
+
+**Confirm the topic pattern matches your device.** The default (`imbrr/#`) is a starting guess — depending on firmware, your device may publish under a different prefix or as a single JSON payload. To see what it actually sends: **Settings → Devices & services → MQTT → Configure → Listen to a topic**, enter `#`, click **Start listening**, and run some water so the device reports. Note the topics that contain your device serial and set the pattern to cover them. The integration recognizes a reading when the topic's last segment is `flow`, `temperature`, `pressure`, or `depth_to_water` and the payload is a plain number or `{"value": <number>}`; it matches the reading to a device by finding the serial in the topic (or uses the sole device if you only have one). If your device's topics or payloads don't fit that shape, open an issue with a sample so the parser can be adjusted.
+
+**Verify it's actually being used:**
+
+- Turn on debug logging — add this to `configuration.yaml` and restart:
+  ```yaml
+  logger:
+    logs:
+      custom_components.imbrr: debug
+  ```
+  On startup you should see `imbrr subscribed to MQTT topic <your pattern>`. (If you instead see a warning that the MQTT integration is not set up, finish the MQTT integration setup first.)
+- **Behavioral check**: run water and watch this integration's **Flow rate** / **Depth to water** entities — on the device named after your dashboard location, *not* the separate "imbrr Monitoring System" device that MQTT discovery creates. With MQTT working they update within a second or two; with it off they only change on each cloud poll (60 s by default).
+
+Totals and long-term statistics always come from the cloud data, never from MQTT, so real-time updates can never double-count your water usage.
+
 ### MQTT troubleshooting
 
 If the status stays **Disconnected**:

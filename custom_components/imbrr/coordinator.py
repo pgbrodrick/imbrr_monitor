@@ -364,15 +364,29 @@ class ImbrrCoordinator(DataUpdateCoordinator[dict[str, ImbrrDeviceData]]):
     @callback
     def handle_mqtt_message(self, topic: str, payload: str) -> None:
         """Fold a real-time MQTT reading into the device data (display only)."""
+        _LOGGER.debug("imbrr MQTT message received on %s: %s", topic, payload)
         segments = [s for s in topic.split("/") if s]
         if not segments:
             return
         key = MQTT_TOPIC_KEY_MAP.get(segments[-1].lower())
         if key is None:
+            _LOGGER.debug(
+                "imbrr MQTT: ignoring %s (last segment %r is not a recognized "
+                "metric; expected one of %s)",
+                topic,
+                segments[-1],
+                sorted(MQTT_TOPIC_KEY_MAP),
+            )
             return
 
         value = _parse_mqtt_payload(payload)
         if value is None:
+            _LOGGER.debug(
+                "imbrr MQTT: ignoring %s (payload %r is not a number or "
+                '{"value": <number>})',
+                topic,
+                payload,
+            )
             return
 
         topic_lower = topic.lower()
@@ -384,8 +398,17 @@ class ImbrrCoordinator(DataUpdateCoordinator[dict[str, ImbrrDeviceData]]):
         elif not matches and len(self.devices) == 1:
             serial = self.devices[0].serial
         else:
+            _LOGGER.debug(
+                "imbrr MQTT: ignoring %s (no serial in topic and %d devices "
+                "configured, so cannot attribute the reading)",
+                topic,
+                len(self.devices),
+            )
             return
 
+        _LOGGER.debug(
+            "imbrr MQTT: applied %s=%s to device %s", key, value, serial
+        )
         data = self._device_data[serial]
         data.mqtt[key] = (value, dt_util.utcnow())
         self.async_set_updated_data(dict(self._device_data))
