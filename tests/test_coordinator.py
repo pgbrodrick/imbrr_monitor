@@ -34,6 +34,9 @@ async def make_coordinator(
     devices = devices or [make_device()]
     coordinator = ImbrrCoordinator(hass, mock_config_entry, api, devices)
     await coordinator.async_load_ledgers()
+    # These tests exercise ingestion directly; in production it is enabled once
+    # the platforms are set up.
+    coordinator.enable_ingest()
     return coordinator
 
 

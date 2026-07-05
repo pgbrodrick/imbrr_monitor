@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD, Platform
@@ -22,6 +21,7 @@ from .const import (
     DEFAULT_BACKFILL_DAYS,
     DEFAULT_MQTT_ENABLED,
     DEFAULT_MQTT_TOPIC,
+    DOMAIN,
 )
 from .coordinator import ImbrrCoordinator
 
@@ -59,46 +59,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: ImbrrConfigEntry) -> boo
 
     coordinator = ImbrrCoordinator(hass, entry, api, devices)
     await coordinator.async_load_ledgers()
-    _seed_backfill(entry, coordinator)
 
-    # The first refresh runs the full ingestion pipeline, including the
-    # initial history backfill window seeded above.
+    # The first refresh only polls current values; history ingestion is
+    # deferred until the sensor entities exist, because statistics are
+    # imported onto those entities.
     await coordinator.async_config_entry_first_refresh()
 
     entry.runtime_data = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
+    # Entities now exist: enable ongoing ingestion and run the initial
+    # backfill / gap-fill in the background so it never blocks setup.
+    coordinator.enable_ingest()
+    backfill_days = int(entry.options.get(CONF_BACKFILL_DAYS, DEFAULT_BACKFILL_DAYS))
+    entry.async_create_background_task(
+        hass,
+        coordinator.async_initial_ingest(backfill_days),
+        name=f"{DOMAIN}_initial_ingest_{entry.entry_id}",
+    )
+
     await _async_setup_mqtt(hass, entry, coordinator)
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     return True
-
-
-def _seed_backfill(entry: ImbrrConfigEntry, coordinator: ImbrrCoordinator) -> None:
-    """Arrange for the first ingest to cover the configured backfill window.
-
-    Rather than a separate backfill code path, the ledger's fetch-window
-    start is seeded N days back while the reading-id watermark stays at 0,
-    so the normal ingestion pipeline pulls and accounts the whole window
-    exactly once.
-    """
-    backfill_days = int(
-        entry.options.get(CONF_BACKFILL_DAYS, DEFAULT_BACKFILL_DAYS)
-    )
-    for device in coordinator.devices:
-        ledger = coordinator.ledgers[device.serial]
-        if ledger.backfill_done:
-            continue
-        if backfill_days > 0 and ledger.last_processed_ts is None:
-            ledger.last_processed_ts = dt_util.utcnow() - timedelta(
-                days=backfill_days
-            )
-            _LOGGER.info(
-                "imbrr %s: backfilling %d days of history on first update",
-                device.serial,
-                backfill_days,
-            )
-        ledger.backfill_done = True
 
 
 async def _async_setup_mqtt(

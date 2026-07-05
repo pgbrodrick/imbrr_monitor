@@ -86,7 +86,7 @@ async def test_backfill_respects_options(hass, mock_config_entry, mock_api) -> N
     assert abs((start - expected).days) <= 1
 
 
-async def test_backfill_not_repeated_after_reload(
+async def test_backfill_not_double_counted_after_reload(
     hass, mock_config_entry, mock_api
 ) -> None:
     mock_api.async_get_latest_depth.return_value = make_latest_depth(reading_id=50)
@@ -101,9 +101,11 @@ async def test_backfill_not_repeated_after_reload(
     assert await setup_entry(hass, mock_config_entry)
 
     coordinator = mock_config_entry.runtime_data
-    # Watermark already at 50: no re-download, and the total carried over.
-    mock_api.async_download_readings.assert_not_awaited()
+    # On reload it gap-fills from the watermark (download runs again), but the
+    # already-processed reading is filtered out, so the total does not grow.
+    mock_api.async_download_readings.assert_awaited()
     assert coordinator.ledgers[TEST_SERIAL].lifetime_gallons == pytest.approx(2.5)
+    assert coordinator.ledgers[TEST_SERIAL].backfill_done is True
 
 
 async def test_mqtt_subscribes_when_enabled_and_available(

@@ -73,8 +73,6 @@ class DeviceLedger:
     lifetime_gallons: float = 0.0
     last_processed_reading_id: int = 0
     last_processed_ts: datetime | None = None
-    stats_gallons_sum: float = 0.0
-    stats_last_imported_hour: datetime | None = None
     backfill_done: bool = False
 
     def as_dict(self) -> dict[str, Any]:
@@ -83,12 +81,6 @@ class DeviceLedger:
             "last_processed_reading_id": self.last_processed_reading_id,
             "last_processed_ts": (
                 self.last_processed_ts.isoformat() if self.last_processed_ts else None
-            ),
-            "stats_gallons_sum": self.stats_gallons_sum,
-            "stats_last_imported_hour": (
-                self.stats_last_imported_hour.isoformat()
-                if self.stats_last_imported_hour
-                else None
             ),
             "backfill_done": self.backfill_done,
         }
@@ -99,8 +91,6 @@ class DeviceLedger:
             lifetime_gallons=float(data.get("lifetime_gallons", 0.0)),
             last_processed_reading_id=int(data.get("last_processed_reading_id", 0)),
             last_processed_ts=_parse_iso(data.get("last_processed_ts")),
-            stats_gallons_sum=float(data.get("stats_gallons_sum", 0.0)),
-            stats_last_imported_hour=_parse_iso(data.get("stats_last_imported_hour")),
             backfill_done=bool(data.get("backfill_done", False)),
         )
 
@@ -159,6 +149,10 @@ class ImbrrCoordinator(DataUpdateCoordinator[dict[str, ImbrrDeviceData]]):
             device.serial: ImbrrDeviceData(device=device) for device in devices
         }
         self._pump_cycle_fetched: dict[str, datetime] = {}
+        # History ingestion writes statistics onto the sensor entities, which
+        # do not exist during the first refresh. It is enabled once the
+        # platforms are set up (see __init__.async_setup_entry).
+        self._ingest_enabled = False
 
     @staticmethod
     def _option(entry: ConfigEntry, key: str) -> int:
@@ -257,7 +251,10 @@ class ImbrrCoordinator(DataUpdateCoordinator[dict[str, ImbrrDeviceData]]):
 
         ledger = self.ledgers.setdefault(device.serial, DeviceLedger())
         latest_reading_id = int(latest.get("reading_id") or 0)
-        if latest_reading_id > ledger.last_processed_reading_id:
+        if (
+            self._ingest_enabled
+            and latest_reading_id > ledger.last_processed_reading_id
+        ):
             await self.async_ingest_history(device)
         data.lifetime_gallons = ledger.lifetime_gallons
 
@@ -334,9 +331,7 @@ class ImbrrCoordinator(DataUpdateCoordinator[dict[str, ImbrrDeviceData]]):
         now_local = dt_util.utcnow().astimezone(tz)
 
         candidates = [
-            ts
-            for ts in (start, ledger.last_processed_ts, ledger.stats_last_imported_hour)
-            if ts is not None
+            ts for ts in (start, ledger.last_processed_ts) if ts is not None
         ]
         start_date = (
             min(candidates).astimezone(tz).date() if candidates else now_local.date()
@@ -360,6 +355,37 @@ class ImbrrCoordinator(DataUpdateCoordinator[dict[str, ImbrrDeviceData]]):
         self._device_data[device.serial].lifetime_gallons = ledger.lifetime_gallons
         self._schedule_save()
         return len(new_rows)
+
+    def enable_ingest(self) -> None:
+        """Allow poll cycles to ingest history (call once entities exist)."""
+        self._ingest_enabled = True
+
+    async def async_initial_ingest(self, backfill_days: int) -> None:
+        """Run the first history load after the sensor entities are created.
+
+        On a fresh install this pulls the full backfill window; on restart it
+        gap-fills from the persisted watermark. Either way statistics now land
+        on entities that exist. Runs as a background task, so failures are
+        logged and retried on the next reload rather than blocking setup.
+        """
+        for device in self.devices:
+            ledger = self.ledgers.setdefault(device.serial, DeviceLedger())
+            start: datetime | None = None
+            if not ledger.backfill_done and backfill_days > 0:
+                start = dt_util.utcnow() - timedelta(days=backfill_days)
+                _LOGGER.info(
+                    "imbrr %s: backfilling %d days of history", device.serial, backfill_days
+                )
+            try:
+                await self.async_ingest_history(device, start=start)
+            except ImbrrError as err:
+                _LOGGER.warning(
+                    "imbrr initial history load failed for %s: %s", device.serial, err
+                )
+                continue
+            ledger.backfill_done = True
+        self._schedule_save()
+        self.async_update_listeners()
 
     # ------------------------------------------------------------------
     # MQTT overlay

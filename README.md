@@ -6,7 +6,7 @@ Unlike a simple "latest value" poller, this integration is built to preserve the
 
 - During pump/flow events your imbrr sensor records a reading every ~5 seconds. The integration detects new data and pulls **every raw reading** from the imbrr cloud — not just whatever value happened to be current at poll time. This works even across Home Assistant restarts or extended downtime: missed readings are backfilled automatically.
 - A persistent **Total water** sensor accumulates every gallon ever pumped (verified to match imbrr's own per-event accounting exactly), ready to use on Home Assistant's **Water dashboard**.
-- Hourly **long-term statistics** (mean/min/max depth-to-water, flow, pressure, and temperature, plus hourly water usage) are written into Home Assistant's recorder with the readings' true timestamps, so your history graphs reflect what actually happened between polls. On first setup, the last 30 days (configurable) of history are imported.
+- Hourly **long-term statistics** (mean/min/max depth-to-water, flow, pressure, and temperature) are written directly onto each sensor with the readings' true timestamps, so a sensor's History card shows backfilled and live data as one continuous series. On first setup, the last 30 days (configurable) of history are imported.
 - Optional **MQTT real-time updates**: if your imbrr device is connected to your local MQTT broker, pushed readings update the entities instantly between cloud polls.
 
 Each imbrr unit appears as its own device in Home Assistant.
@@ -34,7 +34,7 @@ Each imbrr unit appears as its own device in Home Assistant.
    Your credentials are stored by Home Assistant's config-entry storage and are only ever sent to imbrr's servers.
 3. The integration discovers the devices on your account — select the ones you want and finish.
 
-On first setup the integration imports the last 30 days of history (configurable) into long-term statistics; this can take a minute. The **Total water** counter also starts from this window — it reflects water pumped since (backfill window before) install, not since the device was manufactured.
+On first setup the integration imports the last 30 days of history (configurable) as long-term statistics on the sensors; this runs in the background just after the entities are created and can take a minute. The **Total water** counter also starts from this window — it reflects water pumped since (backfill window before) install, not since the device was manufactured. (If the device is newer than the backfill window, you only get history back to when it came online.)
 
 ## Entities
 
@@ -58,16 +58,13 @@ Everything above (as applicable), plus: Storage (gal), Storage percentage, Usage
 
 ### Long-term statistics
 
-In addition to entities, the integration records external statistics you can add to any statistics graph card and to the Water dashboard, under IDs like:
+The Depth to water, Flow rate, Pressure, and Water temperature sensors get **hourly statistics imported directly onto the entity itself** (mean/min/max), with each reading's true timestamp. So the sensor's own History card — and any Statistics graph card pointed at the sensor — shows the backfilled history and the live data as one continuous line, including data from events that happened between polls or while Home Assistant was off. There's no separate statistic ID to hunt for; use the sensor entities directly.
 
-- `imbrr:<serial>_depth_to_water`, `imbrr:<serial>_flow`, `imbrr:<serial>_psi`, `imbrr:<serial>_temp` (hourly mean/min/max)
-- `imbrr:<serial>_gallons` (hourly water usage with cumulative total)
-
-These carry the true reading timestamps, so history is accurate even for events that happened between polls or while Home Assistant was off.
+> Note: Home Assistant cannot inject past *states*, only statistics. So a sensor's short-term (recent, dot-by-dot) history still only covers time since install, but its long-term statistics — what History shows for older ranges — include the full backfilled/gap-filled profile.
 
 ## Water dashboard
 
-**Settings → Dashboards → Energy → Water consumption**: add either the **Total water** sensor or the `imbrr:<serial>_gallons` statistic as a water source.
+**Settings → Dashboards → Energy → Water consumption**: add the **Total water** sensor as a water source (it's a `device_class: water`, total-increasing sensor).
 
 ## Options
 
@@ -152,8 +149,8 @@ It counts from the backfill window at install time forward. imbrr's cloud is sti
 **What happens if Home Assistant is off during a flow event?**
 Nothing is lost. On the next poll the integration notices the reading-id watermark advanced, downloads the missed days of raw data, and accounts for every reading exactly once.
 
-**My graphs show a gap right after install.**
-Statistics are hourly; the current hour is only written once it has fully elapsed.
+**Backfilled history didn't appear immediately after setup.**
+The backfill runs in the background right after the entities are created and can take a minute; imported statistics are hourly, so the current hour only appears once it has fully elapsed. Check the sensor's History card over a longer range (e.g. the last week).
 
 **Timestamps look shifted.**
 imbrr reports timestamps in the device's local timezone. If your Home Assistant timezone differs from the device's, set **Device timezone** in the options.
@@ -169,7 +166,7 @@ imbrr reports timestamps in the device's local timezone. If your Home Assistant 
       custom_components.imbrr: debug
   ```
 
-- **Removing and re-adding** the integration re-runs the backfill; existing external statistics are overwritten going forward. To fully clear old statistics use Developer tools → Statistics, or the `recorder.clear_statistics` action with the `imbrr:<serial>_*` IDs.
+- **Removing and re-adding** the integration re-runs the backfill and re-imports statistics onto the sensors (overwriting overlapping hours). Long-term statistics for a removed sensor can be cleared from Developer tools → Statistics.
 
 ## Disclaimer
 

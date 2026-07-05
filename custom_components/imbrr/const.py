@@ -48,10 +48,6 @@ TYPE_CISTERN = "cistern"
 # Persistence
 STORAGE_VERSION = 1
 
-# External statistics ids: imbrr:<serial_lower>_<key>
-STATISTIC_KEYS = ("depth_to_water", "flow", "psi", "temp")
-STATISTIC_GALLONS_KEY = "gallons"
-
 # The imbrr device publishes a single JSON state blob to <prefix>/<serial>/state,
 # e.g. {"depth_ft":91.56,"temp_f":61.03,"pressure_psi":48.32,"flow_gpm":0.0,
 #       "event_gallons":0.0,"flow_event_status":"completed"}.
