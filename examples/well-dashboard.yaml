@@ -1,0 +1,253 @@
+# =============================================================================
+# imbrr — example single-page well & water monitoring dashboard
+# =============================================================================
+#
+# PREREQUISITES
+#   1. The Plotly Graph Card (HACS → Frontend → "Plotly Graph Card" by dbuezas).
+#      The glance / gauge / entities / conditional cards are built in.
+#   2. A weekly water meter helper for the "resets weekly" graph. Add to
+#      configuration.yaml (or make an equivalent UI helper) and restart:
+#
+#          utility_meter:
+#            well_weekly_water:
+#              source: sensor.well_total_water
+#              cycle: weekly
+#
+# ENTITY NAMES
+#   This assumes your imbrr device is named "Well", giving entity ids like
+#   sensor.well_depth_to_water. If your device has a different name, do a
+#   find/replace of "well_" with your prefix (open any imbrr entity →
+#   settings to see its entity_id).
+#
+# UNITS
+#   Gauge ranges/severity below assume the device's native US units
+#   (ft, psi, gpm, °F). If your Home Assistant displays metric, either adjust
+#   the numbers, or override each entity's unit (entity settings → unit of
+#   measurement) back to the US unit.
+#
+# HOW TO USE
+#   Settings → Dashboards → (new dashboard) → ⋮ → Edit in YAML, and paste the
+#   "views:" block below. Or add the single view to an existing dashboard.
+# =============================================================================
+
+views:
+  - title: Well
+    path: well
+    icon: mdi:water-well
+    type: sections
+    max_columns: 2
+    sections:
+      # ----------------------------------------------------------------- Status
+      - type: grid
+        cards:
+          - type: heading
+            heading: Well & water status
+            heading_style: title
+            icon: mdi:water-well
+
+          # Live "is it pumping right now" banner (MQTT-driven, near-instant).
+          - type: conditional
+            conditions:
+              - entity: binary_sensor.well_flow_active
+                state: "on"
+            card:
+              type: markdown
+              content: >
+                ## 💧 Pump running — {{ states('sensor.well_flow_rate') }}
+                {{ state_attr('sensor.well_flow_rate','unit_of_measurement') }}
+                &nbsp;·&nbsp; {{ states('sensor.well_current_event_water') }}
+                {{ state_attr('sensor.well_current_event_water','unit_of_measurement') }}
+                this event
+
+          # At-a-glance status with explicit icons.
+          - type: glance
+            title: Now
+            columns: 3
+            state_color: true
+            show_state: true
+            entities:
+              - entity: binary_sensor.well_flow_active
+                name: Pumping
+                icon: mdi:water-pump
+              - entity: sensor.well_pressure
+                name: Pressure
+                icon: mdi:gauge
+              - entity: sensor.well_flow_rate
+                name: Flow
+                icon: mdi:water
+              - entity: sensor.well_depth_to_water
+                name: Depth
+                icon: mdi:arrow-down-bold-circle
+              - entity: sensor.well_water_temperature
+                name: Temp
+                icon: mdi:thermometer-water
+              - entity: sensor.well_current_event_water
+                name: This event
+                icon: mdi:cup-water
+
+          # Gauges. Ranges assume ft / psi / gpm (see UNITS note above).
+          - type: horizontal-stack
+            cards:
+              - type: gauge
+                entity: sensor.well_depth_to_water
+                name: Depth to water
+                needle: true
+                min: 0
+                max: 180
+                severity:
+                  green: 0
+                  yellow: 120
+                  red: 150
+              - type: gauge
+                entity: sensor.well_pressure
+                name: Pressure
+                needle: true
+                min: 0
+                max: 80
+                severity:
+                  red: 0
+                  green: 40
+                  yellow: 70
+              - type: gauge
+                entity: sensor.well_flow_rate
+                name: Flow rate
+                needle: true
+                min: 0
+                max: 10
+
+      # -------------------------------------------------------- History & trends
+      - type: grid
+        cards:
+          - type: heading
+            heading: History & trends
+            heading_style: title
+            icon: mdi:chart-line
+
+          # Pressure through time (hourly long-term statistics = includes backfill).
+          - type: custom:plotly-graph
+            title: Pressure history
+            hours_to_show: 168
+            refresh_interval: 60
+            entities:
+              - entity: sensor.well_pressure
+                name: Pressure
+                statistic: mean
+                period: hour
+                line:
+                  color: "#fd7e14"
+                  width: 2
+                fill: tozeroy
+                fillcolor: "rgba(253,126,20,0.15)"
+            layout:
+              paper_bgcolor: "rgba(0,0,0,0)"
+              plot_bgcolor: "rgba(0,0,0,0)"
+              font:
+                color: "#e1e1e1"
+              margin: { t: 30, l: 52, r: 52, b: 40 }
+              legend: { orientation: h, y: 1.15 }
+              xaxis: { gridcolor: "rgba(255,255,255,0.08)" }
+              yaxis: { gridcolor: "rgba(255,255,255,0.08)" }
+
+          # Coupled water depth (left axis) and use / flow rate (right axis).
+          - type: custom:plotly-graph
+            title: Water depth & use
+            hours_to_show: 168
+            refresh_interval: 60
+            entities:
+              - entity: sensor.well_depth_to_water
+                name: Depth to water
+                statistic: mean
+                period: hour
+                yaxis: y1
+                line:
+                  color: "#4e73df"
+                  width: 2
+              - entity: sensor.well_flow_rate
+                name: Peak flow
+                statistic: max
+                period: hour
+                yaxis: y2
+                fill: tozeroy
+                fillcolor: "rgba(28,200,138,0.25)"
+                line:
+                  color: "#1cc88a"
+                  width: 1
+            layout:
+              paper_bgcolor: "rgba(0,0,0,0)"
+              plot_bgcolor: "rgba(0,0,0,0)"
+              font:
+                color: "#e1e1e1"
+              margin: { t: 30, l: 52, r: 52, b: 40 }
+              legend: { orientation: h, y: 1.15 }
+              xaxis: { gridcolor: "rgba(255,255,255,0.08)" }
+              yaxis: { title: Depth, gridcolor: "rgba(255,255,255,0.08)" }
+              yaxis2:
+                title: Flow
+                overlaying: y
+                side: right
+                showgrid: false
+
+          # Cumulative water use that resets every week (utility_meter helper).
+          - type: custom:plotly-graph
+            title: Weekly water use (resets weekly)
+            hours_to_show: 336
+            refresh_interval: 300
+            entities:
+              - entity: sensor.well_weekly_water
+                name: This week
+                fill: tozeroy
+                fillcolor: "rgba(54,185,204,0.2)"
+                line:
+                  color: "#36b9cc"
+                  width: 2
+                  shape: hv
+            layout:
+              paper_bgcolor: "rgba(0,0,0,0)"
+              plot_bgcolor: "rgba(0,0,0,0)"
+              font:
+                color: "#e1e1e1"
+              margin: { t: 30, l: 52, r: 20, b: 40 }
+              xaxis: { gridcolor: "rgba(255,255,255,0.08)" }
+              yaxis: { title: Gallons, gridcolor: "rgba(255,255,255,0.08)" }
+
+      # ------------------------------------------------------ Pump cycles & totals
+      - type: grid
+        cards:
+          - type: heading
+            heading: Pump cycles & totals
+            heading_style: title
+            icon: mdi:pump
+
+          - type: entities
+            title: Last pump cycle
+            entities:
+              - entity: sensor.well_last_pump_cycle_rate
+                icon: mdi:speedometer
+              - entity: sensor.well_last_pump_cycle_water
+                icon: mdi:water
+              - entity: sensor.well_last_pump_cycle_duration
+                icon: mdi:timer-outline
+              - entity: sensor.well_last_pump_cycle_start_pressure
+                icon: mdi:gauge-low
+              - entity: sensor.well_last_pump_cycle_stop_pressure
+                icon: mdi:gauge-full
+
+          - type: entities
+            title: Totals & details
+            entities:
+              - entity: sensor.well_total_water
+                name: Total water (lifetime)
+                icon: mdi:cup-water
+              - entity: sensor.well_weekly_water
+                name: Water used this week
+                icon: mdi:calendar-week
+              - entity: sensor.well_current_event_water
+                icon: mdi:water-plus
+              - entity: sensor.well_water_temperature
+                icon: mdi:thermometer-water
+              - entity: sensor.well_last_reading
+                name: Last reading
+                icon: mdi:clock-outline
+              - entity: binary_sensor.well_flow_active
+                name: Flow active
+                icon: mdi:water-pump

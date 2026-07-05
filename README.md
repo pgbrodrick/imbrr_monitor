@@ -66,6 +66,10 @@ The Depth to water, Flow rate, Pressure, and Water temperature sensors get **hou
 
 **Settings → Dashboards → Energy → Water consumption**: add the **Total water** sensor as a water source (it's a `device_class: water`, total-increasing sensor).
 
+## Example dashboard
+
+A ready-made single-page dashboard that exercises every entity — status glance with icons, gauges, a live "pump running" banner, and Plotly graphs for pressure over time, coupled water depth + use, and weekly-resetting cumulative water — is in [`examples/well-dashboard.yaml`](examples/well-dashboard.yaml). It needs the [Plotly Graph Card](https://github.com/dbuezas/lovelace-plotly-graph-card) (HACS → Frontend) and a small `utility_meter` helper; both are documented in the file's header. Paste the `views:` block into a dashboard's YAML editor and find/replace the `well_` entity prefix with your device's.
+
 ## Options
 
 **Settings → Devices & services → imbrr → Configure**:
