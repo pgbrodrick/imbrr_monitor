@@ -156,6 +156,9 @@ Nothing is lost. On the next poll the integration notices the reading-id waterma
 **Backfilled history didn't appear immediately after setup.**
 The backfill runs in the background right after the entities are created and can take a minute; imported statistics are hourly, so the current hour only appears once it has fully elapsed. Check the sensor's History card over a longer range (e.g. the last week).
 
+**I want to (re)load older history on demand.**
+The automatic backfill runs only once. To re-pull history at any time — for example to recover data from before you first installed, or after a long outage — call the **`imbrr.import_history`** action (Developer tools → Actions → *imbrr: Import history*), optionally with a `days` value. It re-imports statistics onto the sensors and never changes the lifetime total, so it's safe to run repeatedly.
+
 **Timestamps look shifted.**
 imbrr reports timestamps in the device's local timezone. If your Home Assistant timezone differs from the device's, set **Device timezone** in the options.
 

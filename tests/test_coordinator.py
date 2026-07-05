@@ -8,6 +8,7 @@ import pytest
 
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from custom_components.imbrr.api import ImbrrAuthError, ImbrrConnectionError
 from custom_components.imbrr.const import (
@@ -195,6 +196,30 @@ async def test_all_devices_failing_raises_update_failed(
     coordinator = await make_coordinator(hass, mock_config_entry, api)
     with pytest.raises(UpdateFailed):
         await coordinator._async_update_data()
+
+
+async def test_reimport_history_reimports_without_double_count(
+    hass, mock_config_entry
+) -> None:
+    """Re-importing statistics re-downloads but never grows the total."""
+    api = make_mock_api()
+    api.async_get_latest_depth.return_value = make_latest_depth(reading_id=2)
+    api.async_download_readings.return_value = [
+        make_reading(1, NOW, gallons=3.0),
+        make_reading(2, NOW, gallons=4.0),
+    ]
+    coordinator = await make_coordinator(hass, mock_config_entry, api)
+    await coordinator._async_update_data()
+    assert coordinator.ledgers[TEST_SERIAL].lifetime_gallons == pytest.approx(7.0)
+
+    api.async_download_readings.reset_mock()
+    await coordinator.async_reimport_history(30)
+
+    # It re-downloaded the window but did not touch the running total.
+    api.async_download_readings.assert_awaited_once()
+    start, end = api.async_download_readings.await_args.args[1:3]
+    assert (dt_util.utcnow().date() - start).days == 30
+    assert coordinator.ledgers[TEST_SERIAL].lifetime_gallons == pytest.approx(7.0)
 
 
 async def test_ledger_persists_via_store(hass, mock_config_entry) -> None:

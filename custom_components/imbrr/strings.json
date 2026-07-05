@@ -80,5 +80,17 @@
     "binary_sensor": {
       "flow_active": { "name": "Flow active" }
     }
+  },
+  "services": {
+    "import_history": {
+      "name": "Import history",
+      "description": "Re-download raw readings and re-import them as hourly statistics onto the sensor entities. Idempotent and safe to run repeatedly; it does not change the lifetime water total.",
+      "fields": {
+        "days": {
+          "name": "Days",
+          "description": "How many days back to re-import. Defaults to the integration's configured backfill window."
+        }
+      }
+    }
   }
 }

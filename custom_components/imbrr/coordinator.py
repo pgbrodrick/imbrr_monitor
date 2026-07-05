@@ -387,6 +387,37 @@ class ImbrrCoordinator(DataUpdateCoordinator[dict[str, ImbrrDeviceData]]):
         self._schedule_save()
         self.async_update_listeners()
 
+    async def async_reimport_history(self, days: int) -> None:
+        """Re-download and re-import statistics for the last ``days`` days.
+
+        Triggered by the ``imbrr.import_history`` service. Idempotent: it
+        overwrites the hourly statistics on the entities and never touches the
+        gallons ledger or watermark, so it is safe to call repeatedly (e.g. to
+        recover history that predates the one-shot backfill).
+        """
+        tz = self.api.timezone
+        now = dt_util.utcnow()
+        start = (now - timedelta(days=days)).astimezone(tz).date()
+        end = now.astimezone(tz).date()
+        for device in self.devices:
+            try:
+                rows = await self.api.async_download_readings(
+                    device.serial, start, end
+                )
+            except ImbrrError as err:
+                _LOGGER.warning(
+                    "imbrr history re-import failed for %s: %s", device.serial, err
+                )
+                continue
+            ledger = self.ledgers.setdefault(device.serial, DeviceLedger())
+            await async_import_readings(self.hass, device, rows, ledger)
+            _LOGGER.info(
+                "imbrr re-imported %d days of statistics for %s (%d readings)",
+                days,
+                device.serial,
+                len(rows),
+            )
+
     # ------------------------------------------------------------------
     # MQTT overlay
     # ------------------------------------------------------------------

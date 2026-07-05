@@ -15,6 +15,7 @@ from custom_components.imbrr.const import (
     CONF_MQTT_ENABLED,
     CONF_MQTT_TOPIC,
     DEFAULT_BACKFILL_DAYS,
+    DOMAIN,
 )
 
 from .conftest import TEST_SERIAL, make_latest_depth, make_mock_api, make_reading
@@ -33,6 +34,29 @@ async def setup_entry(hass, entry) -> bool:
     ok = await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     return ok
+
+
+async def test_import_history_service(hass, mock_config_entry, mock_api) -> None:
+    """The import_history service re-imports the requested window."""
+    mock_api.async_get_latest_depth.return_value = make_latest_depth(reading_id=50)
+    mock_api.async_download_readings.return_value = [make_reading(50, NOW, gallons=2.5)]
+    assert await setup_entry(hass, mock_config_entry)
+    assert hass.services.has_service(DOMAIN, "import_history")
+
+    mock_api.async_download_readings.reset_mock()
+    await hass.services.async_call(
+        DOMAIN, "import_history", {"days": 14}, blocking=True
+    )
+
+    start = mock_api.async_download_readings.await_args.args[1]
+    assert (dt_util.utcnow().date() - start).days == 14
+    # Re-import doesn't change the running total.
+    coordinator = mock_config_entry.runtime_data
+    assert coordinator.ledgers[TEST_SERIAL].lifetime_gallons == pytest.approx(2.5)
+
+    # Service is removed when the last entry unloads.
+    assert await hass.config_entries.async_unload(mock_config_entry.entry_id)
+    assert not hass.services.has_service(DOMAIN, "import_history")
 
 
 async def test_setup_and_unload(hass, mock_config_entry, mock_api) -> None:

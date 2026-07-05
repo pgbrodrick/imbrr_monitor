@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import logging
 
-from homeassistant.config_entries import ConfigEntry
+import voluptuous as vol
+
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD, Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import aiohttp_client
 from homeassistant.util import dt as dt_util
@@ -28,6 +30,12 @@ from .coordinator import ImbrrCoordinator
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = [Platform.BINARY_SENSOR, Platform.SENSOR]
+
+SERVICE_IMPORT_HISTORY = "import_history"
+ATTR_DAYS = "days"
+IMPORT_HISTORY_SCHEMA = vol.Schema(
+    {vol.Optional(ATTR_DAYS): vol.All(vol.Coerce(int), vol.Range(min=1, max=365))}
+)
 
 type ImbrrConfigEntry = ConfigEntry[ImbrrCoordinator]
 
@@ -80,8 +88,38 @@ async def async_setup_entry(hass: HomeAssistant, entry: ImbrrConfigEntry) -> boo
 
     await _async_setup_mqtt(hass, entry, coordinator)
 
+    _async_register_services(hass)
+
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     return True
+
+
+@callback
+def _async_register_services(hass: HomeAssistant) -> None:
+    """Register the account-wide imbrr services once."""
+    if hass.services.has_service(DOMAIN, SERVICE_IMPORT_HISTORY):
+        return
+
+    async def _handle_import_history(call: ServiceCall) -> None:
+        days_override = call.data.get(ATTR_DAYS)
+        entries = [
+            entry
+            for entry in hass.config_entries.async_entries(DOMAIN)
+            if entry.state is ConfigEntryState.LOADED
+        ]
+        for entry in entries:
+            coordinator: ImbrrCoordinator = entry.runtime_data
+            days = days_override or int(
+                entry.options.get(CONF_BACKFILL_DAYS, DEFAULT_BACKFILL_DAYS)
+            )
+            await coordinator.async_reimport_history(days)
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_IMPORT_HISTORY,
+        _handle_import_history,
+        schema=IMPORT_HISTORY_SCHEMA,
+    )
 
 
 async def _async_setup_mqtt(
@@ -122,4 +160,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: ImbrrConfigEntry) -> bo
     if unload_ok:
         coordinator: ImbrrCoordinator = entry.runtime_data
         await coordinator.async_flush_store()
+        # Drop the shared service once the last entry is gone.
+        remaining = [
+            other
+            for other in hass.config_entries.async_entries(DOMAIN)
+            if other.entry_id != entry.entry_id
+            and other.state is ConfigEntryState.LOADED
+        ]
+        if not remaining and hass.services.has_service(DOMAIN, SERVICE_IMPORT_HISTORY):
+            hass.services.async_remove(DOMAIN, SERVICE_IMPORT_HISTORY)
     return unload_ok
