@@ -255,6 +255,15 @@ class ImbrrApiClient:
             )
         return data
 
+    async def async_get_pump_cycles(self, serial: str) -> list[PumpCycle]:
+        """Return the last 7 days of pump cycles for a device."""
+        data = await self._async_get_json(f"/api/v1/pump_cycles/{serial}")
+        if data.get("status") != "success":
+            raise ImbrrApiError(
+                f"pump_cycles failed: {data.get('message', 'unknown error')}"
+            )
+        return [self._parse_pump_cycle(cycle) for cycle in data.get("cycles", [])]
+
     # ------------------------------------------------------------------
     # Dashboard endpoints (undocumented but stable in practice)
     # ------------------------------------------------------------------
@@ -318,18 +327,6 @@ class ImbrrApiClient:
         readings.sort(key=lambda r: r.reading_id)
         return readings
 
-    async def async_get_pump_cycles(
-        self, numeric_id: str, timezone_name: str
-    ) -> list[PumpCycle]:
-        """Return the last 7 days of pump cycles for a device."""
-        data = await self._async_get_json(
-            "/dashboard/get_pump_cycles",
-            {"device_id": numeric_id, "timezone": timezone_name},
-        )
-        if not data.get("success"):
-            raise ImbrrApiError("get_pump_cycles returned success=false")
-        return [self._parse_pump_cycle(cycle) for cycle in data.get("cycles", [])]
-
     # ------------------------------------------------------------------
     # Parsing helpers
     # ------------------------------------------------------------------
@@ -366,16 +363,8 @@ class ImbrrApiClient:
         return readings
 
     def _parse_pump_cycle(self, cycle: dict[str, Any]) -> PumpCycle:
-        """Parse one pump-cycle dict, e.g. time '7/3/26 10:43pm', duration '01:50'."""
-        when: datetime | None = None
-        raw_time = str(cycle.get("time", "")).strip()
-        if raw_time:
-            try:
-                when = datetime.strptime(raw_time.upper(), "%m/%d/%y %I:%M%p").replace(
-                    tzinfo=self._tz
-                )
-            except ValueError:
-                when = None
+        """Parse one pump-cycle dict, e.g. time '2026-07-03 22:43:00', duration '01:50'."""
+        when = self.parse_timestamp(str(cycle.get("time", "")))
 
         duration_seconds: int | None = None
         raw_duration = str(cycle.get("duration", "")).strip()

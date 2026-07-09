@@ -296,18 +296,14 @@ class ImbrrCoordinator(DataUpdateCoordinator[dict[str, ImbrrDeviceData]]):
     async def _async_maybe_update_pump_cycles(
         self, device: ImbrrDevice, data: ImbrrDeviceData
     ) -> None:
-        if not device.numeric_id:
-            return
         now = dt_util.utcnow()
         fetched = self._pump_cycle_fetched.get(device.serial)
         if fetched and (now - fetched).total_seconds() < PUMP_CYCLE_REFRESH_SECONDS:
             return
         try:
-            cycles = await self.api.async_get_pump_cycles(
-                device.numeric_id, str(self.hass.config.time_zone)
-            )
+            cycles = await self.api.async_get_pump_cycles(device.serial)
         except ImbrrError as err:
-            # Undocumented endpoint: degrade quietly if it changes.
+            # Degrade quietly if the pump-cycles endpoint is unavailable.
             _LOGGER.debug("get_pump_cycles failed for %s: %s", device.serial, err)
             return
         self._pump_cycle_fetched[device.serial] = now

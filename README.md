@@ -177,4 +177,4 @@ imbrr reports timestamps in the device's local timezone. If your Home Assistant 
 
 ## Disclaimer
 
-This is a third-party integration, not affiliated with imbrr. It uses the documented imbrr API v1 plus a few dashboard endpoints for history download, device discovery, and pump-cycle summaries; those may change without notice, in which case the affected features degrade gracefully.
+This is a third-party integration, not affiliated with imbrr. It uses the documented imbrr API v1 plus a couple of dashboard endpoints for history download and device discovery; those may change without notice, in which case the affected features degrade gracefully.

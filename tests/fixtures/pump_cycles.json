@@ -1,8 +1,8 @@
 {
-  "success": true,
+  "status": "success",
   "cycles": [
     {
-      "time": "7/3/26 10:43pm",
+      "time": "2026-07-03 22:43:00",
       "gpm": 4.7,
       "trimmed_gpm": 4.8,
       "gallons": 8.6,
@@ -11,7 +11,7 @@
       "stop_psi": 66.6
     },
     {
-      "time": "7/3/26 10:38pm",
+      "time": "2026-07-03 22:38:00",
       "gpm": 4.7,
       "trimmed_gpm": 4.9,
       "gallons": 11.4,
@@ -20,7 +20,7 @@
       "stop_psi": 66.7
     },
     {
-      "time": "7/3/26 10:24pm",
+      "time": "2026-07-03 22:24:00",
       "gpm": 4.9,
       "trimmed_gpm": 5.0,
       "gallons": 11.0,

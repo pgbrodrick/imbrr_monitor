@@ -197,14 +197,12 @@ async def test_download_readings_chunks_long_ranges(client) -> None:
 async def test_pump_cycles_parsing(client) -> None:
     with aioresponses() as mocked:
         mock_login_success(mocked)
-        import re as _re
-
         mocked.get(
-            _re.compile(rf"{BASE}/dashboard/get_pump_cycles\?.*"),
+            f"{BASE}/api/v1/pump_cycles/{TEST_SERIAL}",
             status=200,
             body=load_fixture("pump_cycles.json"),
         )
-        cycles = await client.async_get_pump_cycles("115", "America/New_York")
+        cycles = await client.async_get_pump_cycles(TEST_SERIAL)
 
     assert len(cycles) == 3
     first = cycles[0]
