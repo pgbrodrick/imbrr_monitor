@@ -15,8 +15,9 @@ import asyncio
 import csv
 import io
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, tzinfo
+from datetime import date, datetime, tzinfo
 from typing import Any
 
 import aiohttp
@@ -28,8 +29,11 @@ _LOGGER = logging.getLogger(__name__)
 REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=30)
 DOWNLOAD_TIMEOUT = aiohttp.ClientTimeout(total=120)
 
-# Longest span requested from the raw-data download endpoint in one call.
-MAX_DOWNLOAD_SPAN_DAYS = 31
+# The readings endpoints are rate-limited server-side; retry a 429 there
+# with backoff instead of failing the whole ingest. Other endpoints
+# (latest_depth, pump_cycles, devices, ...) are not rate-limited.
+MAX_RATE_LIMIT_RETRIES = 3
+DEFAULT_RATE_LIMIT_RETRY_AFTER = 5.0  # seconds, used if no Retry-After header
 
 
 class ImbrrError(Exception):
@@ -46,6 +50,14 @@ class ImbrrConnectionError(ImbrrError):
 
 class ImbrrApiError(ImbrrError):
     """The imbrr cloud returned an unexpected response."""
+
+
+class ImbrrRateLimitError(ImbrrApiError):
+    """The imbrr cloud rate-limited this request (HTTP 429)."""
+
+    def __init__(self, message: str, retry_after: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
 
 
 @dataclass
@@ -102,6 +114,20 @@ def _to_float(value: Any) -> float | None:
 def _to_int(value: Any) -> int | None:
     number = _to_float(value)
     return int(number) if number is not None else None
+
+
+def _has_more(headers: Mapping[str, str]) -> bool:
+    return headers.get("X-Has-More", "").strip().lower() == "true"
+
+
+def _parse_retry_after(value: str | None) -> float | None:
+    """Parse a numeric-seconds Retry-After header; ignore HTTP-date forms."""
+    if not value:
+        return None
+    try:
+        return float(value.strip())
+    except ValueError:
+        return None
 
 
 class ImbrrApiClient:
@@ -176,6 +202,19 @@ class ImbrrApiClient:
         _retry: bool = True,
     ) -> str:
         """GET a path, re-authenticating once if the session has expired."""
+        body, _headers = await self._async_get_with_headers(
+            path, params, timeout, _retry
+        )
+        return body
+
+    async def _async_get_with_headers(
+        self,
+        path: str,
+        params: dict[str, str] | None = None,
+        timeout: aiohttp.ClientTimeout = REQUEST_TIMEOUT,
+        _retry: bool = True,
+    ) -> tuple[str, Mapping[str, str]]:
+        """GET a path, returning the body and response headers."""
         await self._async_ensure_login()
         url = f"{self._base_url}{path}"
         try:
@@ -185,6 +224,7 @@ class ImbrrApiClient:
                 final_path = resp.url.path
                 body = await resp.text()
                 status = resp.status
+                headers = resp.headers
         except (aiohttp.ClientError, asyncio.TimeoutError) as err:
             raise ImbrrConnectionError(f"Error connecting to imbrr: {err}") from err
 
@@ -201,11 +241,19 @@ class ImbrrApiClient:
             async with self._login_lock:
                 self._logged_in = False
                 await self.async_login()
-            return await self._async_get(path, params, timeout, _retry=False)
+            return await self._async_get_with_headers(
+                path, params, timeout, _retry=False
+            )
+
+        if status == 429:
+            raise ImbrrRateLimitError(
+                f"imbrr rate-limited {path}",
+                retry_after=_parse_retry_after(headers.get("Retry-After")),
+            )
 
         if status >= 400:
             raise ImbrrApiError(f"imbrr returned HTTP {status} for {path}")
-        return body
+        return body, headers
 
     async def _async_get_json(
         self, path: str, params: dict[str, str] | None = None
@@ -275,33 +323,56 @@ class ImbrrApiClient:
             )
         return devices
 
-    # ------------------------------------------------------------------
-    # Dashboard endpoints (undocumented but stable in practice)
-    # ------------------------------------------------------------------
+    async def _async_get_readings_page(
+        self, path: str, params: dict[str, str] | None = None
+    ) -> tuple[str, Mapping[str, str]]:
+        """GET one page of a readings endpoint, retrying on 429 with backoff.
 
-    async def async_download_readings(
-        self, serial: str, start: date, end: date
-    ) -> list[FlowReading]:
-        """Download all raw readings for a device between two dates (inclusive)."""
-        readings: list[FlowReading] = []
-        chunk_start = start
-        while chunk_start <= end:
-            chunk_end = min(chunk_start + timedelta(days=MAX_DOWNLOAD_SPAN_DAYS), end)
-            body = await self._async_get(
-                "/dashboard/",
-                {
-                    "id": serial,
-                    "download": "true",
-                    "date_range": "custom",
-                    "custom_start": chunk_start.isoformat(),
-                    "custom_end": chunk_end.isoformat(),
-                },
-                timeout=DOWNLOAD_TIMEOUT,
-            )
-            readings.extend(self._parse_readings_csv(body))
-            chunk_start = chunk_end + timedelta(days=1)
-        readings.sort(key=lambda r: r.reading_id)
-        return readings
+        Only the readings endpoints are rate-limited server-side; other
+        endpoints go through ``_async_get_with_headers`` directly.
+        """
+        attempt = 0
+        while True:
+            try:
+                return await self._async_get_with_headers(
+                    path, params, timeout=DOWNLOAD_TIMEOUT
+                )
+            except ImbrrRateLimitError as err:
+                attempt += 1
+                if attempt > MAX_RATE_LIMIT_RETRIES:
+                    raise
+                delay = (
+                    err.retry_after
+                    if err.retry_after is not None
+                    else DEFAULT_RATE_LIMIT_RETRY_AFTER
+                )
+                _LOGGER.debug(
+                    "imbrr readings endpoint rate-limited (attempt %d/%d); "
+                    "retrying in %.1fs",
+                    attempt,
+                    MAX_RATE_LIMIT_RETRIES,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+
+    async def async_get_readings_since_id(
+        self, serial: str, reading_id: int
+    ) -> tuple[list[FlowReading], bool]:
+        """Return one page of readings after ``reading_id``, and whether more remain."""
+        body, headers = await self._async_get_readings_page(
+            f"/api/v1/readings/{serial}/since_id/{reading_id}"
+        )
+        return self._parse_readings_csv(body), _has_more(headers)
+
+    async def async_get_readings_since_date(
+        self, serial: str, start: date, until: date | None = None
+    ) -> tuple[list[FlowReading], bool]:
+        """Return one page of readings in [start, until] (inclusive, device-local)."""
+        params = {"until": until.isoformat()} if until else None
+        body, headers = await self._async_get_readings_page(
+            f"/api/v1/readings/{serial}/since_date/{start.isoformat()}", params
+        )
+        return self._parse_readings_csv(body), _has_more(headers)
 
     # ------------------------------------------------------------------
     # Parsing helpers

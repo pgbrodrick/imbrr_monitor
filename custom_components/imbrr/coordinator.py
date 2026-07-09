@@ -3,10 +3,11 @@
 The coordinator owns the full-fidelity ingestion pipeline:
 
 1. Poll ``latest_depth`` per device. Its ``reading_id`` acts as a watermark:
-   when it advances past the last processed reading, the raw-data download
-   endpoint is fetched for the intervening days, so every ~5-second reading
-   is captured even though polling is much slower (and even across Home
-   Assistant restarts or extended downtime).
+   when it advances past the last processed reading, the readings endpoint
+   is paged (by reading_id once a watermark exists, otherwise by date for
+   the initial backfill) so every ~5-second reading is captured even though
+   polling is much slower (and even across Home Assistant restarts or
+   extended downtime).
 2. Every newly seen row's ``gallons`` value is added to a persistent
    lifetime total exactly once (per-row gallons summed over an event have
    been verified to equal the server's ``accumulated_gallons``).
@@ -24,7 +25,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -35,6 +36,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 
 from .api import (
+    FlowReading,
     ImbrrApiClient,
     ImbrrApiError,
     ImbrrAuthError,
@@ -314,6 +316,41 @@ class ImbrrCoordinator(DataUpdateCoordinator[dict[str, ImbrrDeviceData]]):
     # History ingestion (the "full profile through time" pipeline)
     # ------------------------------------------------------------------
 
+    async def _async_drain_since_id(
+        self, serial: str, reading_id: int
+    ) -> list[FlowReading]:
+        """Page through /readings/since_id until the server reports no more."""
+        all_rows: list[FlowReading] = []
+        cursor = reading_id
+        while True:
+            rows, has_more = await self.api.async_get_readings_since_id(serial, cursor)
+            if not rows:
+                break
+            all_rows.extend(rows)
+            cursor = max(r.reading_id for r in rows)
+            if not has_more:
+                break
+        return all_rows
+
+    async def _async_drain_since_date(
+        self, serial: str, start: date, end: date
+    ) -> list[FlowReading]:
+        """Page through /readings/since_date, then since_id if truncated.
+
+        since_date has no cursor of its own; once its first (date-bounded)
+        page is exhausted, continuing by reading_id is safe because both
+        endpoints share the same ascending reading_id ordering.
+        """
+        rows, has_more = await self.api.async_get_readings_since_date(
+            serial, start, end
+        )
+        all_rows = list(rows)
+        while has_more and rows:
+            cursor = max(r.reading_id for r in rows)
+            rows, has_more = await self.api.async_get_readings_since_id(serial, cursor)
+            all_rows.extend(rows)
+        return all_rows
+
     async def async_ingest_history(
         self, device: ImbrrDevice, start: datetime | None = None
     ) -> int:
@@ -323,19 +360,32 @@ class ImbrrCoordinator(DataUpdateCoordinator[dict[str, ImbrrDeviceData]]):
         fetch window start (used by the initial backfill).
         """
         ledger = self.ledgers.setdefault(device.serial, DeviceLedger())
-        tz = self.api.timezone
-        now_local = dt_util.utcnow().astimezone(tz)
 
-        candidates = [
-            ts for ts in (start, ledger.last_processed_ts) if ts is not None
-        ]
-        start_date = (
-            min(candidates).astimezone(tz).date() if candidates else now_local.date()
+        if ledger.last_processed_reading_id > 0:
+            rows = await self._async_drain_since_id(
+                device.serial, ledger.last_processed_reading_id
+            )
+        else:
+            tz = self.api.timezone
+            now_local = dt_util.utcnow().astimezone(tz)
+            candidates = [
+                ts for ts in (start, ledger.last_processed_ts) if ts is not None
+            ]
+            start_date = (
+                min(candidates).astimezone(tz).date()
+                if candidates
+                else now_local.date()
+            )
+            rows = await self._async_drain_since_date(
+                device.serial, start_date, now_local.date()
+            )
+
+        _LOGGER.debug(
+            "imbrr %s: fetched %d raw reading(s) from the readings API this ingest",
+            device.serial,
+            len(rows),
         )
 
-        rows = await self.api.async_download_readings(
-            device.serial, start_date, now_local.date()
-        )
         new_rows = [
             r for r in rows if r.reading_id > ledger.last_processed_reading_id
         ]
@@ -397,9 +447,7 @@ class ImbrrCoordinator(DataUpdateCoordinator[dict[str, ImbrrDeviceData]]):
         end = now.astimezone(tz).date()
         for device in self.devices:
             try:
-                rows = await self.api.async_download_readings(
-                    device.serial, start, end
-                )
+                rows = await self._async_drain_since_date(device.serial, start, end)
             except ImbrrError as err:
                 _LOGGER.warning(
                     "imbrr history re-import failed for %s: %s", device.serial, err

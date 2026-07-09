@@ -93,7 +93,8 @@ def make_mock_api(devices: list[ImbrrDevice] | None = None) -> MagicMock:
         else None
     )
     api.async_get_latest_depth.return_value = make_latest_depth()
-    api.async_download_readings.return_value = []
+    api.async_get_readings_since_id.return_value = ([], False)
+    api.async_get_readings_since_date.return_value = ([], False)
     api.async_get_latest_flow_event.return_value = []
     api.async_get_pump_cycles.return_value = []
     api.async_get_devices.return_value = devices or [make_device()]
