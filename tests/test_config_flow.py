@@ -72,7 +72,6 @@ async def test_full_flow_creates_entry(hass, mock_client) -> None:
         {
             "serial": TEST_SERIAL,
             "name": "Test Well Site",
-            "numeric_id": "115",
             "device_type": TYPE_WELL,
         }
     ]

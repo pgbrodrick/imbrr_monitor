@@ -1,0 +1,15 @@
+{
+  "status": "success",
+  "devices": [
+    {
+      "serial": "AABBCCDDEEFF",
+      "name": "Test Well Site",
+      "device_type": "well"
+    },
+    {
+      "serial": "112233445566",
+      "name": "Test Cistern Site",
+      "device_type": "cistern"
+    }
+  ]
+}

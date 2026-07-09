@@ -43,7 +43,6 @@ class ImbrrSensorDescription(SensorEntityDescription):
     value_fn: Callable[[ImbrrCoordinator, ImbrrDeviceData], Any]
     attrs_fn: Callable[[ImbrrDeviceData], dict[str, Any]] | None = None
     device_types: tuple[str, ...] = (TYPE_WELL, TYPE_CISTERN)
-    requires_numeric_id: bool = False
 
 
 def _latest_timestamp(
@@ -139,7 +138,7 @@ SENSOR_DESCRIPTIONS: tuple[ImbrrSensorDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=_latest_timestamp,
     ),
-    # Last pump cycle summary (well devices; undocumented endpoint, fails soft)
+    # Last pump cycle summary (well devices; fails soft if the fetch errors)
     ImbrrSensorDescription(
         key="last_pump_cycle_gpm",
         translation_key="last_pump_cycle_gpm",
@@ -148,7 +147,6 @@ SENSOR_DESCRIPTIONS: tuple[ImbrrSensorDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         icon="mdi:pump",
         device_types=(TYPE_WELL,),
-        requires_numeric_id=True,
         value_fn=_pump_cycle_value("gpm"),
         attrs_fn=_pump_cycle_attrs,
     ),
@@ -160,7 +158,6 @@ SENSOR_DESCRIPTIONS: tuple[ImbrrSensorDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         icon="mdi:water",
         device_types=(TYPE_WELL,),
-        requires_numeric_id=True,
         value_fn=_pump_cycle_value("gallons"),
     ),
     ImbrrSensorDescription(
@@ -170,7 +167,6 @@ SENSOR_DESCRIPTIONS: tuple[ImbrrSensorDescription, ...] = (
         device_class=SensorDeviceClass.DURATION,
         entity_category=EntityCategory.DIAGNOSTIC,
         device_types=(TYPE_WELL,),
-        requires_numeric_id=True,
         value_fn=_pump_cycle_value("duration_seconds"),
     ),
     ImbrrSensorDescription(
@@ -181,7 +177,6 @@ SENSOR_DESCRIPTIONS: tuple[ImbrrSensorDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         icon="mdi:gauge-low",
         device_types=(TYPE_WELL,),
-        requires_numeric_id=True,
         value_fn=_pump_cycle_value("start_psi"),
     ),
     ImbrrSensorDescription(
@@ -192,7 +187,6 @@ SENSOR_DESCRIPTIONS: tuple[ImbrrSensorDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         icon="mdi:gauge-full",
         device_types=(TYPE_WELL,),
-        requires_numeric_id=True,
         value_fn=_pump_cycle_value("stop_psi"),
     ),
     # Cistern-only statistics
@@ -275,8 +269,6 @@ async def async_setup_entry(
     for device in coordinator.devices:
         for description in SENSOR_DESCRIPTIONS:
             if device.device_type not in description.device_types:
-                continue
-            if description.requires_numeric_id and not device.numeric_id:
                 continue
             entities.append(ImbrrSensor(coordinator, device.serial, description))
         entities.append(ImbrrLifetimeWaterSensor(coordinator, device.serial))

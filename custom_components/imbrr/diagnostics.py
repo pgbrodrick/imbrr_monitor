@@ -11,7 +11,7 @@ from homeassistant.core import HomeAssistant
 
 from .coordinator import ImbrrCoordinator
 
-TO_REDACT = {CONF_EMAIL, CONF_PASSWORD, "serial", "id", "unique_id", "numeric_id"}
+TO_REDACT = {CONF_EMAIL, CONF_PASSWORD, "serial", "id", "unique_id"}
 
 
 async def async_get_config_entry_diagnostics(
@@ -25,7 +25,6 @@ async def async_get_config_entry_diagnostics(
         ledger = coordinator.ledgers.get(device.serial)
         devices[f"device_{index}"] = {
             "device_type": device.device_type,
-            "has_numeric_id": device.numeric_id is not None,
             "available": data.available if data else None,
             "flow_in_progress": data.flow_in_progress if data else None,
             "latest": async_redact_data(data.latest, TO_REDACT) if data else None,

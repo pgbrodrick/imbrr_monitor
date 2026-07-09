@@ -81,7 +81,6 @@ async def test_cistern_sensors(hass, mock_api) -> None:
                 {
                     "serial": "112233445566",
                     "name": "Test Cistern Site",
-                    "numeric_id": None,
                     "device_type": TYPE_CISTERN,
                 }
             ],

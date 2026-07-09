@@ -170,7 +170,7 @@ async def test_auth_error_raises_config_entry_auth_failed(
 async def test_per_device_failure_isolation(hass, mock_config_entry) -> None:
     """One failing device does not take down the other."""
     well = make_device()
-    other = make_device(serial="112233445566", name="Other", numeric_id=None)
+    other = make_device(serial="112233445566", name="Other")
     api = make_mock_api()
 
     def latest_depth(serial):

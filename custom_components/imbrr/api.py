@@ -15,14 +15,13 @@ import asyncio
 import csv
 import io
 import logging
-import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, tzinfo
 from typing import Any
 
 import aiohttp
 
-from .const import BASE_URL, TYPE_CISTERN, TYPE_WELL
+from .const import BASE_URL, TYPE_WELL
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -31,14 +30,6 @@ DOWNLOAD_TIMEOUT = aiohttp.ClientTimeout(total=120)
 
 # Longest span requested from the raw-data download endpoint in one call.
 MAX_DOWNLOAD_SPAN_DAYS = 31
-
-_DEVICE_LINK_RE = re.compile(
-    r'<a\s+class="dropdown-item"\s+href="\?id=([0-9A-Fa-f]{12})"[^>]*>\s*(.*?)\s*</a>',
-    re.DOTALL,
-)
-_NUMERIC_ID_RE = re.compile(r"deviceId\s*=\s*'(\d+)'")
-
-CISTERN_ONLY_MESSAGE = "only available for cistern devices"
 
 
 class ImbrrError(Exception):
@@ -63,7 +54,6 @@ class ImbrrDevice:
 
     serial: str
     name: str
-    numeric_id: str | None = None
     device_type: str = TYPE_WELL
 
 
@@ -264,44 +254,30 @@ class ImbrrApiClient:
             )
         return [self._parse_pump_cycle(cycle) for cycle in data.get("cycles", [])]
 
+    async def async_get_devices(self) -> list[ImbrrDevice]:
+        """Discover the account's devices via the documented devices endpoint."""
+        data = await self._async_get_json("/api/v1/devices")
+        if data.get("status") != "success":
+            raise ImbrrApiError(
+                f"devices failed: {data.get('message', 'unknown error')}"
+            )
+        devices: list[ImbrrDevice] = []
+        for item in data.get("devices", []):
+            serial = str(item.get("serial", "")).upper()
+            if not serial:
+                continue
+            devices.append(
+                ImbrrDevice(
+                    serial=serial,
+                    name=str(item.get("name") or serial),
+                    device_type=item.get("device_type") or TYPE_WELL,
+                )
+            )
+        return devices
+
     # ------------------------------------------------------------------
     # Dashboard endpoints (undocumented but stable in practice)
     # ------------------------------------------------------------------
-
-    async def async_get_devices(self) -> list[ImbrrDevice]:
-        """Discover the account's devices from the dashboard page."""
-        html = await self._async_get("/dashboard/")
-        seen: dict[str, ImbrrDevice] = {}
-        for serial, label in _DEVICE_LINK_RE.findall(html):
-            serial = serial.upper()
-            if serial in seen:
-                continue
-            name = re.sub(r"\s+", " ", label).strip() or serial
-            seen[serial] = ImbrrDevice(serial=serial, name=name)
-        devices = list(seen.values())
-
-        for device in devices:
-            try:
-                page = await self._async_get("/dashboard/", {"id": device.serial})
-                match = _NUMERIC_ID_RE.search(page)
-                device.numeric_id = match.group(1) if match else None
-            except ImbrrError:
-                _LOGGER.debug(
-                    "Could not determine numeric id for %s", device.serial
-                )
-            device.device_type = await self._async_classify_device(device.serial)
-        return devices
-
-    async def _async_classify_device(self, serial: str) -> str:
-        """Classify a device as well or cistern via the cistern_stats probe."""
-        try:
-            await self.async_get_cistern_stats(serial)
-        except ImbrrApiError as err:
-            if CISTERN_ONLY_MESSAGE in str(err):
-                return TYPE_WELL
-            _LOGGER.debug("Device %s classification fallback to well: %s", serial, err)
-            return TYPE_WELL
-        return TYPE_CISTERN
 
     async def async_download_readings(
         self, serial: str, start: date, end: date

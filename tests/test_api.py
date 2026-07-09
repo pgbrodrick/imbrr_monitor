@@ -10,6 +10,7 @@ from aioresponses import aioresponses
 
 from custom_components.imbrr.api import (
     ImbrrApiClient,
+    ImbrrApiError,
     ImbrrAuthError,
     ImbrrConnectionError,
 )
@@ -140,37 +141,35 @@ async def test_csv_parsing_edge_cases(client) -> None:
 
 
 async def test_device_discovery(client) -> None:
-    """Devices are discovered from dashboard markup and classified by probe."""
-    dashboard = load_fixture("dashboard.html")
+    """Devices are discovered via the /api/v1/devices endpoint."""
     with aioresponses() as mocked:
         mock_login_success(mocked)
-        mocked.get(f"{BASE}/dashboard/", status=200, body=dashboard)
-        # Per-device pages for the numeric id
         mocked.get(
-            f"{BASE}/dashboard/?id={TEST_SERIAL}",
+            f"{BASE}/api/v1/devices",
             status=200,
-            body="<script>const deviceId = '115';</script>",
-        )
-        mocked.get(
-            f"{BASE}/api/v1/cistern_stats/{TEST_SERIAL}",
-            status=200,
-            body='{"status":"failed","message":"This endpoint is only available for cistern devices"}',
-        )
-        mocked.get(f"{BASE}/dashboard/?id=112233445566", status=200, body="<html/>")
-        mocked.get(
-            f"{BASE}/api/v1/cistern_stats/112233445566",
-            status=200,
-            body=load_fixture("cistern_stats.json"),
+            body=load_fixture("devices.json"),
         )
         devices = await client.async_get_devices()
 
     assert [d.serial for d in devices] == [TEST_SERIAL, "112233445566"]
     well, cistern = devices
     assert well.name == "Test Well Site"
-    assert well.numeric_id == "115"
     assert well.device_type == TYPE_WELL
     assert cistern.name == "Test Cistern Site"
     assert cistern.device_type == TYPE_CISTERN
+
+
+async def test_device_discovery_failure_raises(client) -> None:
+    """A status != success response raises ImbrrApiError."""
+    with aioresponses() as mocked:
+        mock_login_success(mocked)
+        mocked.get(
+            f"{BASE}/api/v1/devices",
+            status=200,
+            body='{"status":"failed","message":"no account"}',
+        )
+        with pytest.raises(ImbrrApiError):
+            await client.async_get_devices()
 
 
 async def test_download_readings_chunks_long_ranges(client) -> None:
