@@ -16,7 +16,7 @@ import csv
 import io
 import logging
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import date, datetime, tzinfo
 from typing import Any
 
@@ -67,6 +67,18 @@ class ImbrrDevice:
     serial: str
     name: str
     device_type: str = TYPE_WELL
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> ImbrrDevice:
+        """Build from persisted config-entry data, ignoring unknown keys.
+
+        Config entries written by older versions may carry fields that no
+        longer exist on this dataclass (e.g. ``numeric_id``); dropping them
+        here keeps setup working across upgrades instead of raising
+        ``TypeError`` on an unexpected keyword.
+        """
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in known})
 
 
 @dataclass

@@ -14,6 +14,7 @@ from custom_components.imbrr.api import (
     ImbrrApiError,
     ImbrrAuthError,
     ImbrrConnectionError,
+    ImbrrDevice,
     ImbrrRateLimitError,
 )
 from custom_components.imbrr.const import TYPE_CISTERN, TYPE_WELL
@@ -140,6 +141,22 @@ async def test_csv_parsing_edge_cases(client) -> None:
     readings = client._parse_readings_csv(blanks)
     assert readings[0].gallons == 0.0
     assert readings[0].flow is None
+
+
+def test_device_from_dict_ignores_legacy_keys() -> None:
+    """Persisted entry data from older versions may carry dropped fields."""
+    device = ImbrrDevice.from_dict(
+        {
+            "serial": TEST_SERIAL,
+            "name": "Legacy Well",
+            "device_type": TYPE_WELL,
+            "numeric_id": "115",  # removed field; must be ignored, not raise
+        }
+    )
+    assert device.serial == TEST_SERIAL
+    assert device.name == "Legacy Well"
+    assert device.device_type == TYPE_WELL
+    assert not hasattr(device, "numeric_id")
 
 
 async def test_device_discovery(client) -> None:

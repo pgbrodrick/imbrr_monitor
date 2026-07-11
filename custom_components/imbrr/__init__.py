@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import asdict
 
 import voluptuous as vol
 
@@ -53,6 +54,30 @@ def _resolve_timezone(hass: HomeAssistant, entry: ConfigEntry):
     return dt_util.get_default_time_zone()
 
 
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Migrate old config entries to the current schema."""
+    if entry.version > 1:
+        # A newer major schema than this code understands (downgrade).
+        return False
+
+    if entry.minor_version < 2:
+        # Rewrite stored devices to the canonical shape, dropping fields that
+        # no longer exist on ImbrrDevice (e.g. numeric_id). from_dict tolerates
+        # them at runtime too; this just keeps .storage clean.
+        devices = [
+            asdict(ImbrrDevice.from_dict(device))
+            for device in entry.data.get(CONF_DEVICES, [])
+        ]
+        hass.config_entries.async_update_entry(
+            entry,
+            data={**entry.data, CONF_DEVICES: devices},
+            minor_version=2,
+        )
+        _LOGGER.debug("Migrated imbrr config entry %s to minor version 2", entry.entry_id)
+
+    return True
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ImbrrConfigEntry) -> bool:
     """Set up imbrr from a config entry."""
     api = ImbrrApiClient(
@@ -61,7 +86,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ImbrrConfigEntry) -> boo
         entry.data[CONF_PASSWORD],
         _resolve_timezone(hass, entry),
     )
-    devices = [ImbrrDevice(**device) for device in entry.data[CONF_DEVICES]]
+    devices = [
+        ImbrrDevice.from_dict(device) for device in entry.data[CONF_DEVICES]
+    ]
     if not devices:
         raise ConfigEntryNotReady("No imbrr devices configured")
 

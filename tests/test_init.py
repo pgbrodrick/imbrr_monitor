@@ -9,16 +9,26 @@ import pytest
 
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.util import dt as dt_util
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.imbrr.const import (
     CONF_BACKFILL_DAYS,
+    CONF_DEVICES,
     CONF_MQTT_ENABLED,
     CONF_MQTT_TOPIC,
     DEFAULT_BACKFILL_DAYS,
     DOMAIN,
+    TYPE_WELL,
 )
 
-from .conftest import TEST_SERIAL, make_latest_depth, make_mock_api, make_reading
+from .conftest import (
+    TEST_EMAIL,
+    TEST_PASSWORD,
+    TEST_SERIAL,
+    make_latest_depth,
+    make_mock_api,
+    make_reading,
+)
 
 NOW = datetime.now(timezone.utc)
 
@@ -34,6 +44,74 @@ async def setup_entry(hass, entry) -> bool:
     ok = await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     return ok
+
+
+async def test_setup_tolerates_legacy_numeric_id(hass, mock_api) -> None:
+    """Entries persisted before numeric_id was dropped must still load.
+
+    Older versions stored a ``numeric_id`` field on each device; rebuilding
+    ImbrrDevice from that data must ignore the unknown key rather than raise
+    TypeError and fail setup on upgrade.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title=TEST_EMAIL,
+        unique_id=TEST_EMAIL,
+        data={
+            "email": TEST_EMAIL,
+            "password": TEST_PASSWORD,
+            CONF_DEVICES: [
+                {
+                    "serial": TEST_SERIAL,
+                    "name": "Test Well Site",
+                    "numeric_id": "115",
+                    "device_type": TYPE_WELL,
+                }
+            ],
+        },
+        options={},
+    )
+    entry.add_to_hass(hass)
+
+    assert await setup_entry(hass, entry)
+    assert entry.state is ConfigEntryState.LOADED
+    coordinator = entry.runtime_data
+    assert [d.serial for d in coordinator.devices] == [TEST_SERIAL]
+
+
+async def test_migration_strips_legacy_numeric_id(hass, mock_api) -> None:
+    """A v1.1 entry is migrated to v1.2, dropping numeric_id from storage."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title=TEST_EMAIL,
+        unique_id=TEST_EMAIL,
+        version=1,
+        minor_version=1,
+        data={
+            "email": TEST_EMAIL,
+            "password": TEST_PASSWORD,
+            CONF_DEVICES: [
+                {
+                    "serial": TEST_SERIAL,
+                    "name": "Test Well Site",
+                    "numeric_id": "115",
+                    "device_type": TYPE_WELL,
+                }
+            ],
+        },
+        options={},
+    )
+    entry.add_to_hass(hass)
+
+    assert await setup_entry(hass, entry)
+    assert entry.minor_version == 2
+    assert entry.data[CONF_DEVICES] == [
+        {
+            "serial": TEST_SERIAL,
+            "name": "Test Well Site",
+            "device_type": TYPE_WELL,
+        }
+    ]
 
 
 async def test_import_history_service(hass, mock_config_entry, mock_api) -> None:
