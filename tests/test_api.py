@@ -9,9 +9,12 @@ import pytest
 from aioresponses import aioresponses
 
 from custom_components.imbrr.api import (
+    MAX_RATE_LIMIT_RETRIES,
     ImbrrApiClient,
+    ImbrrApiError,
     ImbrrAuthError,
     ImbrrConnectionError,
+    ImbrrRateLimitError,
 )
 from custom_components.imbrr.const import TYPE_CISTERN, TYPE_WELL
 
@@ -140,71 +143,126 @@ async def test_csv_parsing_edge_cases(client) -> None:
 
 
 async def test_device_discovery(client) -> None:
-    """Devices are discovered from dashboard markup and classified by probe."""
-    dashboard = load_fixture("dashboard.html")
+    """Devices are discovered via the /api/v1/devices endpoint."""
     with aioresponses() as mocked:
         mock_login_success(mocked)
-        mocked.get(f"{BASE}/dashboard/", status=200, body=dashboard)
-        # Per-device pages for the numeric id
         mocked.get(
-            f"{BASE}/dashboard/?id={TEST_SERIAL}",
+            f"{BASE}/api/v1/devices",
             status=200,
-            body="<script>const deviceId = '115';</script>",
-        )
-        mocked.get(
-            f"{BASE}/api/v1/cistern_stats/{TEST_SERIAL}",
-            status=200,
-            body='{"status":"failed","message":"This endpoint is only available for cistern devices"}',
-        )
-        mocked.get(f"{BASE}/dashboard/?id=112233445566", status=200, body="<html/>")
-        mocked.get(
-            f"{BASE}/api/v1/cistern_stats/112233445566",
-            status=200,
-            body=load_fixture("cistern_stats.json"),
+            body=load_fixture("devices.json"),
         )
         devices = await client.async_get_devices()
 
     assert [d.serial for d in devices] == [TEST_SERIAL, "112233445566"]
     well, cistern = devices
     assert well.name == "Test Well Site"
-    assert well.numeric_id == "115"
     assert well.device_type == TYPE_WELL
     assert cistern.name == "Test Cistern Site"
     assert cistern.device_type == TYPE_CISTERN
 
 
-async def test_download_readings_chunks_long_ranges(client) -> None:
-    """Ranges longer than one chunk issue multiple download requests."""
+async def test_device_discovery_failure_raises(client) -> None:
+    """A status != success response raises ImbrrApiError."""
+    with aioresponses() as mocked:
+        mock_login_success(mocked)
+        mocked.get(
+            f"{BASE}/api/v1/devices",
+            status=200,
+            body='{"status":"failed","message":"no account"}',
+        )
+        with pytest.raises(ImbrrApiError):
+            await client.async_get_devices()
+
+
+async def test_readings_since_id_parses_has_more_header(client) -> None:
     csv_body = load_fixture("download_week.csv")
     with aioresponses() as mocked:
         mock_login_success(mocked)
-        # 90 days => 3 chunked requests; match any download query.
-        import re as _re
-
         mocked.get(
-            _re.compile(rf"{BASE}/dashboard/\?.*download=true.*"),
+            f"{BASE}/api/v1/readings/{TEST_SERIAL}/since_id/100",
             status=200,
             body=csv_body,
-            repeat=True,
+            headers={"X-Has-More": "true"},
         )
-        readings = await client.async_download_readings(
+        readings, has_more = await client.async_get_readings_since_id(TEST_SERIAL, 100)
+    assert len(readings) == 20
+    assert has_more is True
+
+
+async def test_readings_since_date_parses_has_more_header(client) -> None:
+    csv_body = load_fixture("download_week.csv")
+    with aioresponses() as mocked:
+        mock_login_success(mocked)
+        mocked.get(
+            f"{BASE}/api/v1/readings/{TEST_SERIAL}/since_date/2026-04-01?until=2026-06-30",
+            status=200,
+            body=csv_body,
+            headers={"X-Has-More": "false"},
+        )
+        readings, has_more = await client.async_get_readings_since_date(
             TEST_SERIAL, date(2026, 4, 1), date(2026, 6, 30)
         )
-    assert len(readings) == 60  # 20 rows x 3 chunks
-    assert readings == sorted(readings, key=lambda r: r.reading_id)
+    assert len(readings) == 20
+    assert has_more is False
+
+
+async def test_readings_retries_on_429_then_succeeds(client) -> None:
+    """A single rate-limit response is retried and eventually succeeds."""
+    csv_body = load_fixture("download_week.csv")
+    with aioresponses() as mocked:
+        mock_login_success(mocked)
+        mocked.get(
+            f"{BASE}/api/v1/readings/{TEST_SERIAL}/since_id/100",
+            status=429,
+            headers={"Retry-After": "0"},
+        )
+        mocked.get(
+            f"{BASE}/api/v1/readings/{TEST_SERIAL}/since_id/100",
+            status=200,
+            body=csv_body,
+            headers={"X-Has-More": "false"},
+        )
+        readings, has_more = await client.async_get_readings_since_id(TEST_SERIAL, 100)
+    assert len(readings) == 20
+    assert has_more is False
+
+
+async def test_readings_exhausts_retries_raises(client) -> None:
+    """Repeated 429s past the retry budget raise ImbrrRateLimitError."""
+    with aioresponses() as mocked:
+        mock_login_success(mocked)
+        for _ in range(MAX_RATE_LIMIT_RETRIES + 1):
+            mocked.get(
+                f"{BASE}/api/v1/readings/{TEST_SERIAL}/since_id/100",
+                status=429,
+                headers={"Retry-After": "0"},
+            )
+        with pytest.raises(ImbrrRateLimitError):
+            await client.async_get_readings_since_id(TEST_SERIAL, 100)
+
+
+async def test_non_readings_429_raises_without_retry(client) -> None:
+    """Only the readings endpoints retry on 429; others fail immediately."""
+    with aioresponses() as mocked:
+        mock_login_success(mocked)
+        mocked.get(
+            f"{BASE}/api/v1/pump_cycles/{TEST_SERIAL}",
+            status=429,
+            headers={"Retry-After": "0"},
+        )
+        with pytest.raises(ImbrrRateLimitError):
+            await client.async_get_pump_cycles(TEST_SERIAL)
 
 
 async def test_pump_cycles_parsing(client) -> None:
     with aioresponses() as mocked:
         mock_login_success(mocked)
-        import re as _re
-
         mocked.get(
-            _re.compile(rf"{BASE}/dashboard/get_pump_cycles\?.*"),
+            f"{BASE}/api/v1/pump_cycles/{TEST_SERIAL}",
             status=200,
             body=load_fixture("pump_cycles.json"),
         )
-        cycles = await client.async_get_pump_cycles("115", "America/New_York")
+        cycles = await client.async_get_pump_cycles(TEST_SERIAL)
 
     assert len(cycles) == 3
     first = cycles[0]

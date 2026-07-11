@@ -39,16 +39,19 @@ async def setup_entry(hass, entry) -> bool:
 async def test_import_history_service(hass, mock_config_entry, mock_api) -> None:
     """The import_history service re-imports the requested window."""
     mock_api.async_get_latest_depth.return_value = make_latest_depth(reading_id=50)
-    mock_api.async_download_readings.return_value = [make_reading(50, NOW, gallons=2.5)]
+    mock_api.async_get_readings_since_date.return_value = (
+        [make_reading(50, NOW, gallons=2.5)],
+        False,
+    )
     assert await setup_entry(hass, mock_config_entry)
     assert hass.services.has_service(DOMAIN, "import_history")
 
-    mock_api.async_download_readings.reset_mock()
+    mock_api.async_get_readings_since_date.reset_mock()
     await hass.services.async_call(
         DOMAIN, "import_history", {"days": 14}, blocking=True
     )
 
-    start = mock_api.async_download_readings.await_args.args[1]
+    start = mock_api.async_get_readings_since_date.await_args.args[1]
     assert (dt_util.utcnow().date() - start).days == 14
     # Re-import doesn't change the running total.
     coordinator = mock_config_entry.runtime_data
@@ -80,13 +83,14 @@ async def test_first_setup_seeds_backfill_window(
 ) -> None:
     """On first setup the fetch window starts backfill_days in the past."""
     mock_api.async_get_latest_depth.return_value = make_latest_depth(reading_id=50)
-    mock_api.async_download_readings.return_value = [
-        make_reading(50, NOW, gallons=2.5)
-    ]
+    mock_api.async_get_readings_since_date.return_value = (
+        [make_reading(50, NOW, gallons=2.5)],
+        False,
+    )
 
     assert await setup_entry(hass, mock_config_entry)
 
-    call = mock_api.async_download_readings.await_args
+    call = mock_api.async_get_readings_since_date.await_args
     start = call.args[1]
     expected = (dt_util.utcnow() - timedelta(days=DEFAULT_BACKFILL_DAYS)).date()
     assert abs((start - expected).days) <= 1
@@ -101,11 +105,11 @@ async def test_backfill_respects_options(hass, mock_config_entry, mock_api) -> N
         mock_config_entry, options={CONF_BACKFILL_DAYS: 7}
     )
     mock_api.async_get_latest_depth.return_value = make_latest_depth(reading_id=50)
-    mock_api.async_download_readings.return_value = []
+    mock_api.async_get_readings_since_date.return_value = ([], False)
 
     assert await setup_entry(hass, mock_config_entry)
 
-    start = mock_api.async_download_readings.await_args.args[1]
+    start = mock_api.async_get_readings_since_date.await_args.args[1]
     expected = (dt_util.utcnow() - timedelta(days=7)).date()
     assert abs((start - expected).days) <= 1
 
@@ -114,20 +118,22 @@ async def test_backfill_not_double_counted_after_reload(
     hass, mock_config_entry, mock_api
 ) -> None:
     mock_api.async_get_latest_depth.return_value = make_latest_depth(reading_id=50)
-    mock_api.async_download_readings.return_value = [
-        make_reading(50, NOW, gallons=2.5)
-    ]
+    mock_api.async_get_readings_since_date.return_value = (
+        [make_reading(50, NOW, gallons=2.5)],
+        False,
+    )
     assert await setup_entry(hass, mock_config_entry)
     assert await hass.config_entries.async_unload(mock_config_entry.entry_id)
 
-    mock_api.async_download_readings.reset_mock()
+    mock_api.async_get_readings_since_id.return_value = ([], False)
     mock_api.async_get_latest_depth.return_value = make_latest_depth(reading_id=50)
     assert await setup_entry(hass, mock_config_entry)
 
     coordinator = mock_config_entry.runtime_data
-    # On reload it gap-fills from the watermark (download runs again), but the
-    # already-processed reading is filtered out, so the total does not grow.
-    mock_api.async_download_readings.assert_awaited()
+    # On reload, the persisted watermark (reading_id 50) is already >0, so
+    # catch-up resumes via since_id instead of since_date; the server
+    # naturally returns nothing new, so the total does not grow.
+    mock_api.async_get_readings_since_id.assert_awaited()
     assert coordinator.ledgers[TEST_SERIAL].lifetime_gallons == pytest.approx(2.5)
     assert coordinator.ledgers[TEST_SERIAL].backfill_done is True
 

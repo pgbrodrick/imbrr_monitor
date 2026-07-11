@@ -167,5 +167,7 @@ async def async_import_readings(
         }
         async_import_statistics(hass, metadata, stats)
         _LOGGER.debug(
-            "imbrr statistics: imported %d hourly points for %s", len(stats), entity_id
+            "imbrr statistics from readings API: imported %d hourly points for %s",
+            len(stats),
+            entity_id,
         )

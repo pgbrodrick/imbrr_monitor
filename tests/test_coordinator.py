@@ -49,7 +49,7 @@ async def test_first_ingest_accounts_all_rows(hass, mock_config_entry) -> None:
         make_reading(3, NOW - timedelta(minutes=28), gallons=0.5),
     ]
     api.async_get_latest_depth.return_value = make_latest_depth(reading_id=3)
-    api.async_download_readings.return_value = rows
+    api.async_get_readings_since_date.return_value = (rows, False)
 
     coordinator = await make_coordinator(hass, mock_config_entry, api)
     data = await coordinator._async_update_data()
@@ -66,7 +66,7 @@ async def test_no_double_count_on_repeat_polls(hass, mock_config_entry) -> None:
     api = make_mock_api()
     rows = [make_reading(1, NOW, gallons=1.0), make_reading(2, NOW, gallons=1.0)]
     api.async_get_latest_depth.return_value = make_latest_depth(reading_id=2)
-    api.async_download_readings.return_value = rows
+    api.async_get_readings_since_date.return_value = (rows, False)
 
     coordinator = await make_coordinator(hass, mock_config_entry, api)
     await coordinator._async_update_data()
@@ -74,39 +74,40 @@ async def test_no_double_count_on_repeat_polls(hass, mock_config_entry) -> None:
     await coordinator._async_update_data()
 
     assert coordinator.ledgers[TEST_SERIAL].lifetime_gallons == pytest.approx(2.0)
-    # Watermark unchanged => the download endpoint was hit exactly once.
-    assert api.async_download_readings.await_count == 1
+    # Watermark unchanged => the readings endpoint was hit exactly once.
+    assert api.async_get_readings_since_date.await_count == 1
+    assert api.async_get_readings_since_id.await_count == 0
 
 
 async def test_incremental_rows_only_counted_once(hass, mock_config_entry) -> None:
-    """A later poll re-fetching overlapping days only counts rows past the watermark."""
+    """A second poll fetches by watermark and only counts the new rows."""
     api = make_mock_api()
     first_batch = [make_reading(i, NOW - timedelta(minutes=10 - i), gallons=1.0) for i in (1, 2)]
     api.async_get_latest_depth.return_value = make_latest_depth(reading_id=2)
-    api.async_download_readings.return_value = first_batch
+    api.async_get_readings_since_date.return_value = (first_batch, False)
 
     coordinator = await make_coordinator(hass, mock_config_entry, api)
     await coordinator._async_update_data()
 
-    # New readings appear; the download returns the overlapping full day.
-    second_batch = first_batch + [
+    # New readings appear; since_id (watermark=2) returns only the new rows.
+    new_rows = [
         make_reading(3, NOW, gallons=0.25),
         make_reading(4, NOW, gallons=0.25),
     ]
     api.async_get_latest_depth.return_value = make_latest_depth(reading_id=4)
-    api.async_download_readings.return_value = second_batch
+    api.async_get_readings_since_id.return_value = (new_rows, False)
     await coordinator._async_update_data()
 
     ledger = coordinator.ledgers[TEST_SERIAL]
     assert ledger.lifetime_gallons == pytest.approx(2.5)
     assert ledger.last_processed_reading_id == 4
+    api.async_get_readings_since_id.assert_awaited_once_with(TEST_SERIAL, 2)
 
 
-async def test_gap_fill_uses_watermark_date(hass, mock_config_entry) -> None:
-    """After downtime, the fetch window starts at the last processed timestamp."""
+async def test_gap_fill_uses_watermark_reading_id(hass, mock_config_entry) -> None:
+    """After downtime, catch-up resumes from the last processed reading_id."""
     api = make_mock_api()
     api.async_get_latest_depth.return_value = make_latest_depth(reading_id=10)
-    api.async_download_readings.return_value = []
 
     coordinator = await make_coordinator(hass, mock_config_entry, api)
     ledger = coordinator.ledgers[TEST_SERIAL]
@@ -115,10 +116,8 @@ async def test_gap_fill_uses_watermark_date(hass, mock_config_entry) -> None:
 
     await coordinator._async_update_data()
 
-    call = api.async_download_readings.await_args
-    start, end = call.args[1], call.args[2]
-    assert start == (NOW - timedelta(days=3)).date()
-    assert end >= NOW.date() - timedelta(days=1)
+    api.async_get_readings_since_id.assert_awaited_once_with(TEST_SERIAL, 5)
+    api.async_get_readings_since_date.assert_not_awaited()
 
 
 async def test_live_values_during_flow_event(hass, mock_config_entry) -> None:
@@ -170,7 +169,7 @@ async def test_auth_error_raises_config_entry_auth_failed(
 async def test_per_device_failure_isolation(hass, mock_config_entry) -> None:
     """One failing device does not take down the other."""
     well = make_device()
-    other = make_device(serial="112233445566", name="Other", numeric_id=None)
+    other = make_device(serial="112233445566", name="Other")
     api = make_mock_api()
 
     def latest_depth(serial):
@@ -204,20 +203,23 @@ async def test_reimport_history_reimports_without_double_count(
     """Re-importing statistics re-downloads but never grows the total."""
     api = make_mock_api()
     api.async_get_latest_depth.return_value = make_latest_depth(reading_id=2)
-    api.async_download_readings.return_value = [
-        make_reading(1, NOW, gallons=3.0),
-        make_reading(2, NOW, gallons=4.0),
-    ]
+    api.async_get_readings_since_date.return_value = (
+        [
+            make_reading(1, NOW, gallons=3.0),
+            make_reading(2, NOW, gallons=4.0),
+        ],
+        False,
+    )
     coordinator = await make_coordinator(hass, mock_config_entry, api)
     await coordinator._async_update_data()
     assert coordinator.ledgers[TEST_SERIAL].lifetime_gallons == pytest.approx(7.0)
 
-    api.async_download_readings.reset_mock()
+    api.async_get_readings_since_date.reset_mock()
     await coordinator.async_reimport_history(30)
 
     # It re-downloaded the window but did not touch the running total.
-    api.async_download_readings.assert_awaited_once()
-    start, end = api.async_download_readings.await_args.args[1:3]
+    api.async_get_readings_since_date.assert_awaited_once()
+    start, end = api.async_get_readings_since_date.await_args.args[1:3]
     assert (dt_util.utcnow().date() - start).days == 30
     assert coordinator.ledgers[TEST_SERIAL].lifetime_gallons == pytest.approx(7.0)
 
@@ -226,10 +228,13 @@ async def test_ledger_persists_via_store(hass, mock_config_entry) -> None:
     """Ledgers survive a coordinator rebuild via the persisted store."""
     api = make_mock_api()
     api.async_get_latest_depth.return_value = make_latest_depth(reading_id=2)
-    api.async_download_readings.return_value = [
-        make_reading(1, NOW, gallons=3.0),
-        make_reading(2, NOW, gallons=4.0),
-    ]
+    api.async_get_readings_since_date.return_value = (
+        [
+            make_reading(1, NOW, gallons=3.0),
+            make_reading(2, NOW, gallons=4.0),
+        ],
+        False,
+    )
     coordinator = await make_coordinator(hass, mock_config_entry, api)
     await coordinator._async_update_data()
     await coordinator.async_flush_store()

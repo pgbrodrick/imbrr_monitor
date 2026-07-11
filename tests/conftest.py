@@ -19,7 +19,6 @@ FIXTURE_DIR = pathlib.Path(__file__).parent / "fixtures"
 TEST_EMAIL = "user@example.com"
 TEST_PASSWORD = "test-password"
 TEST_SERIAL = "AABBCCDDEEFF"
-TEST_NUMERIC_ID = "115"
 
 
 @pytest.fixture(autouse=True)
@@ -35,12 +34,9 @@ def load_fixture(name: str) -> str:
 def make_device(
     serial: str = TEST_SERIAL,
     name: str = "Test Well Site",
-    numeric_id: str | None = TEST_NUMERIC_ID,
     device_type: str = TYPE_WELL,
 ) -> ImbrrDevice:
-    return ImbrrDevice(
-        serial=serial, name=name, numeric_id=numeric_id, device_type=device_type
-    )
+    return ImbrrDevice(serial=serial, name=name, device_type=device_type)
 
 
 def make_reading(
@@ -97,7 +93,8 @@ def make_mock_api(devices: list[ImbrrDevice] | None = None) -> MagicMock:
         else None
     )
     api.async_get_latest_depth.return_value = make_latest_depth()
-    api.async_download_readings.return_value = []
+    api.async_get_readings_since_id.return_value = ([], False)
+    api.async_get_readings_since_date.return_value = ([], False)
     api.async_get_latest_flow_event.return_value = []
     api.async_get_pump_cycles.return_value = []
     api.async_get_devices.return_value = devices or [make_device()]
@@ -118,7 +115,6 @@ def mock_config_entry(hass) -> MockConfigEntry:
                 {
                     "serial": TEST_SERIAL,
                     "name": "Test Well Site",
-                    "numeric_id": TEST_NUMERIC_ID,
                     "device_type": TYPE_WELL,
                 }
             ],
