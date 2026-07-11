@@ -68,6 +68,8 @@ class ImbrrConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle the imbrr config flow."""
 
     VERSION = 1
+    # 2: dropped the per-device numeric_id field from stored entry data.
+    MINOR_VERSION = 2
 
     def __init__(self) -> None:
         self._email: str | None = None
