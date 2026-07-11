@@ -259,6 +259,12 @@ STATE_PAYLOAD_FLOWING = (
     '{"depth_ft":120.4,"temp_f":57.6,"pressure_psi":45.1,'
     '"flow_gpm":5.20,"event_gallons":3.140,"flow_event_status":"in_progress"}'
 )
+# The device keeps publishing the pre-shutoff flow as a residual value even
+# after the event has completed (its model lags the physical shutoff).
+STATE_PAYLOAD_RESIDUAL = (
+    '{"depth_ft":94.9,"temp_f":66.6,"pressure_psi":57.4,'
+    '"flow_gpm":6.35,"event_gallons":0.000,"flow_event_status":"completed"}'
+)
 
 
 async def test_mqtt_json_state_blob_overlays_all_metrics(
@@ -302,13 +308,41 @@ async def test_mqtt_json_state_sets_flow_active_and_refreshes(
     assert api.async_get_latest_depth.await_count >= 1
 
 
-async def test_mqtt_overlay_updates_live_value(hass, mock_config_entry) -> None:
+async def test_residual_flow_reads_zero_when_not_active(
+    hass, mock_config_entry
+) -> None:
+    """A residual non-zero flow_gpm on a completed event must not stick.
+
+    Regression: the device publishes the last flow rate over MQTT even after
+    the event completes; flow_rate must read 0 (consistent with the
+    flow_active binary sensor) rather than the stale value.
+    """
     api = make_mock_api()
-    api.async_get_latest_depth.return_value = make_latest_depth(reading_id=0)
+    api.async_get_latest_depth.return_value = make_latest_depth(
+        reading_id=0, status="completed"
+    )
     coordinator = await make_coordinator(hass, mock_config_entry, api)
     coordinator.async_set_updated_data(await coordinator._async_update_data())
 
+    coordinator.handle_mqtt_message(STATE_TOPIC, STATE_PAYLOAD_RESIDUAL)
+
+    assert coordinator.is_flow_active(TEST_SERIAL) is False
+    # Residual flow is suppressed while idle...
     assert coordinator.get_live_value(TEST_SERIAL, "flow") == 0.0
+    # ...but the other live metrics still reflect the fresh overlay.
+    assert coordinator.get_live_value(TEST_SERIAL, "psi") == 57.4
+    assert coordinator.get_live_value(TEST_SERIAL, "depth_to_water") == 94.9
+
+
+async def test_mqtt_overlay_updates_live_value(hass, mock_config_entry) -> None:
+    api = make_mock_api()
+    # in_progress so live flow is reported (it is suppressed while idle).
+    api.async_get_latest_depth.return_value = make_latest_depth(
+        reading_id=0, status="in_progress"
+    )
+    coordinator = await make_coordinator(hass, mock_config_entry, api)
+    coordinator.async_set_updated_data(await coordinator._async_update_data())
+
     coordinator.handle_mqtt_message(f"imbrr/{TEST_SERIAL}/flow", "6.25")
     assert coordinator.get_live_value(TEST_SERIAL, "flow") == 6.25
 

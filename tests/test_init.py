@@ -234,12 +234,13 @@ async def test_mqtt_subscribes_when_enabled_and_available(
     subscribe.assert_awaited_once()
     assert subscribe.await_args.args[1] == "imbrr/#"
 
-    # The subscription callback feeds the coordinator overlay.
+    # The subscription callback feeds the coordinator overlay (pressure is
+    # always live; flow is suppressed unless the well is actively pumping).
     callback = subscribe.await_args.args[2]
-    msg = MagicMock(topic=f"imbrr/{TEST_SERIAL}/flow", payload="4.5")
+    msg = MagicMock(topic=f"imbrr/{TEST_SERIAL}/pressure", payload="57.4")
     await callback(msg)
     coordinator = mock_config_entry.runtime_data
-    assert coordinator.get_live_value(TEST_SERIAL, "flow") == 4.5
+    assert coordinator.get_live_value(TEST_SERIAL, "psi") == 57.4
 
 
 async def test_mqtt_enabled_but_not_setup_degrades_gracefully(

@@ -544,6 +544,13 @@ class ImbrrCoordinator(DataUpdateCoordinator[dict[str, ImbrrDeviceData]]):
         data = self.data.get(serial) if self.data else self._device_data.get(serial)
         if data is None:
             return None
+        # Flow only has meaning while the well is actively pumping. Once an
+        # event completes the device can still publish a residual, non-zero
+        # flow_gpm over MQTT (its model lags the shutoff), so force 0 rather
+        # than trusting the overlay — this keeps flow_rate consistent with the
+        # flow_active binary sensor instead of sticking at the last rate.
+        if key == "flow" and not self._data_flow_active(data):
+            return 0.0
         overlay = data.mqtt.get(key)
         if overlay is not None:
             value, received = overlay
