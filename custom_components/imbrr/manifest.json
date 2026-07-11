@@ -11,5 +11,5 @@
   "issue_tracker": "https://github.com/pgbrodrick/imbrr_monitor/issues",
   "loggers": ["custom_components.imbrr"],
   "requirements": [],
-  "version": "0.2.0-beta.1"
+  "version": "0.2.0-beta.2"
 }
