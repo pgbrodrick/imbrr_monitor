@@ -53,19 +53,19 @@ async def test_well_sensor_values(hass, mock_config_entry, mock_api) -> None:
     ]
     await setup_entry(hass, mock_config_entry)
 
-    assert hass.states.get("binary_sensor.test_well_site_flow_active").state == "on"
+    assert hass.states.get("binary_sensor.imbrr_flow_active").state == "on"
     assert float(
-        hass.states.get("sensor.test_well_site_current_event_water").state
+        hass.states.get("sensor.imbrr_current_event_gallons").state
     ) == pytest.approx(3.21)
     assert float(
-        hass.states.get("sensor.test_well_site_last_pump_cycle_rate").state
+        hass.states.get("sensor.imbrr_last_pump_cycle_gpm").state
     ) == pytest.approx(4.7)
     assert (
-        hass.states.get("sensor.test_well_site_last_pump_cycle_duration").state
+        hass.states.get("sensor.imbrr_last_pump_cycle_duration").state
         == "110"
     )
     # Timestamp sensor renders the latest reading time as an ISO string.
-    last_reading = hass.states.get("sensor.test_well_site_last_reading")
+    last_reading = hass.states.get("sensor.imbrr_last_reading")
     assert last_reading.state.startswith("2026-07-03T22:43:10")
 
 
@@ -104,14 +104,14 @@ async def test_cistern_sensors(hass, mock_api) -> None:
     await setup_entry(hass, entry)
 
     assert float(
-        hass.states.get("sensor.test_cistern_site_storage").state
+        hass.states.get("sensor.imbrr_storage_gallons").state
     ) == pytest.approx(1250.5)
-    assert hass.states.get("sensor.test_cistern_site_storage_percentage").state == "75"
+    assert hass.states.get("sensor.imbrr_storage_percent").state == "75"
     assert float(
-        hass.states.get("sensor.test_cistern_site_usage_last_24_hours").state
+        hass.states.get("sensor.imbrr_usage_24h").state
     ) == pytest.approx(45.2)
     # No pump-cycle entities for cistern devices.
-    assert hass.states.get("sensor.test_cistern_site_last_pump_cycle_rate") is None
+    assert hass.states.get("sensor.imbrr_last_pump_cycle_gpm") is None
 
 
 async def test_entities_unavailable_when_device_fails(
@@ -119,7 +119,7 @@ async def test_entities_unavailable_when_device_fails(
 ) -> None:
     await setup_entry(hass, mock_config_entry)
     assert (
-        hass.states.get("sensor.test_well_site_total_water").state
+        hass.states.get("sensor.imbrr_total_water").state
         != STATE_UNAVAILABLE
     )
 
@@ -129,7 +129,7 @@ async def test_entities_unavailable_when_device_fails(
     await hass.async_block_till_done()
 
     assert (
-        hass.states.get("sensor.test_well_site_total_water").state
+        hass.states.get("sensor.imbrr_total_water").state
         == STATE_UNAVAILABLE
     )
 
@@ -147,7 +147,7 @@ async def test_total_water_restores_when_ledger_lost(
         hass,
         [
             (
-                State("sensor.test_well_site_total_water", "1234.5"),
+                State("sensor.imbrr_total_water", "1234.5"),
                 {"native_value": 1234.5, "native_unit_of_measurement": "gal"},
             )
         ],
@@ -161,5 +161,5 @@ async def test_total_water_restores_when_ledger_lost(
     ].lifetime_gallons == pytest.approx(1234.5)
     # The test hass runs metric, so the water total renders in liters.
     assert float(
-        hass.states.get("sensor.test_well_site_total_water").state
+        hass.states.get("sensor.imbrr_total_water").state
     ) == pytest.approx(1234.5 * 3.78541, rel=1e-3)
