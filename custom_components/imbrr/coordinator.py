@@ -76,6 +76,8 @@ class DeviceLedger:
     last_processed_reading_id: int = 0
     last_processed_ts: datetime | None = None
     backfill_done: bool = False
+    pump_cycles_total: int = 0
+    last_cycle_ts: datetime | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -85,6 +87,10 @@ class DeviceLedger:
                 self.last_processed_ts.isoformat() if self.last_processed_ts else None
             ),
             "backfill_done": self.backfill_done,
+            "pump_cycles_total": self.pump_cycles_total,
+            "last_cycle_ts": (
+                self.last_cycle_ts.isoformat() if self.last_cycle_ts else None
+            ),
         }
 
     @classmethod
@@ -94,6 +100,8 @@ class DeviceLedger:
             last_processed_reading_id=int(data.get("last_processed_reading_id", 0)),
             last_processed_ts=_parse_iso(data.get("last_processed_ts")),
             backfill_done=bool(data.get("backfill_done", False)),
+            pump_cycles_total=int(data.get("pump_cycles_total", 0)),
+            last_cycle_ts=_parse_iso(data.get("last_cycle_ts")),
         )
 
 
@@ -117,6 +125,7 @@ class ImbrrDeviceData:
     live: dict[str, float | None] = field(default_factory=dict)
     lifetime_gallons: float = 0.0
     last_pump_cycle: PumpCycle | None = None
+    pump_cycles_total: int = 0
     flow_in_progress: bool = False
     mqtt: dict[str, tuple[float, datetime]] = field(default_factory=dict)
     mqtt_status: tuple[str, datetime] | None = None
@@ -259,6 +268,7 @@ class ImbrrCoordinator(DataUpdateCoordinator[dict[str, ImbrrDeviceData]]):
         ):
             await self.async_ingest_history(device)
         data.lifetime_gallons = ledger.lifetime_gallons
+        data.pump_cycles_total = ledger.pump_cycles_total
 
         await self._async_update_live_values(device, data)
 
@@ -311,6 +321,32 @@ class ImbrrCoordinator(DataUpdateCoordinator[dict[str, ImbrrDeviceData]]):
         self._pump_cycle_fetched[device.serial] = now
         if cycles:
             data.last_pump_cycle = cycles[0]
+        self._count_new_pump_cycles(device, data, cycles)
+
+    def _count_new_pump_cycles(
+        self, device: ImbrrDevice, data: ImbrrDeviceData, cycles: list[PumpCycle]
+    ) -> None:
+        """Maintain a persistent, monotonic count of pump cycles.
+
+        The endpoint returns the last ~7 days of cycles each time; we advance a
+        timestamp watermark and add only cycles newer than it. The first fetch
+        just establishes the watermark (without counting the pre-existing
+        history), so the counter grows from install forward — the source for
+        the daily/weekly/monthly pump-cycle statistics.
+        """
+        ledger = self.ledgers.setdefault(device.serial, DeviceLedger())
+        cycle_times = [c.time for c in cycles if c.time is not None]
+        if cycle_times:
+            newest = max(cycle_times)
+            if ledger.last_cycle_ts is None:
+                ledger.last_cycle_ts = newest
+            else:
+                new = sum(1 for t in cycle_times if t > ledger.last_cycle_ts)
+                if new:
+                    ledger.pump_cycles_total += new
+                    ledger.last_cycle_ts = newest
+                    self._schedule_save()
+        data.pump_cycles_total = ledger.pump_cycles_total
 
     # ------------------------------------------------------------------
     # History ingestion (the "full profile through time" pipeline)

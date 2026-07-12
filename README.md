@@ -68,7 +68,12 @@ The Depth to water, Flow rate, Pressure, and Water temperature sensors get **hou
 
 ## Example dashboard
 
-A ready-made single-page dashboard that exercises every entity — status glance with icons, gauges, a live "pump running" banner, and Plotly graphs for pressure over time, coupled water depth (axis reversed so the water surface is at the top) + use, and a daily cumulative-water curve — is in [`examples/well-dashboard.yaml`](examples/well-dashboard.yaml). It only needs the [Plotly Graph Card](https://github.com/dbuezas/lovelace-plotly-graph-card) (HACS → Frontend); the cumulative graph integrates flow inside the card, so no helper is required. Paste the `views:` block into a dashboard's YAML editor and find/replace the `well_` entity prefix with your device's.
+A ready-made two-view dashboard is in [`examples/well-dashboard.yaml`](examples/well-dashboard.yaml):
+
+- **Well** — live status glance with icons, gauges, a "pump running" banner, and short-term (48 h) Plotly trends: coupled water depth (axis reversed so the surface is at the top) + flow, pressure over time, and a daily cumulative-water curve.
+- **Long-term** — daily / weekly / monthly aggregates (average depth, water use, average pump rate, and pump-cycle counts) using the built-in Statistics Graph card.
+
+Both views use the [Plotly Graph Card](https://github.com/dbuezas/lovelace-plotly-graph-card) (HACS → Frontend); View 2 also uses the built-in Statistics Graph card. The pump-cycle-count graphs need a small helper documented in the file. Paste the `views:` block into a dashboard's YAML editor and find/replace the `well_` entity prefix with your device's.
 
 ## Options
 

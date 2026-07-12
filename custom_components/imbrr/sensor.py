@@ -139,6 +139,17 @@ SENSOR_DESCRIPTIONS: tuple[ImbrrSensorDescription, ...] = (
         value_fn=_latest_timestamp,
     ),
     # Last pump cycle summary (well devices; fails soft if the fetch errors)
+    # Persistent, monotonic pump-cycle count (drives daily/weekly/monthly
+    # cycle statistics; counts from install forward).
+    ImbrrSensorDescription(
+        key="pump_cycles",
+        translation_key="pump_cycles",
+        native_unit_of_measurement="cycles",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        icon="mdi:counter",
+        device_types=(TYPE_WELL,),
+        value_fn=lambda c, d: d.pump_cycles_total,
+    ),
     ImbrrSensorDescription(
         key="last_pump_cycle_gpm",
         translation_key="last_pump_cycle_gpm",

@@ -1,11 +1,16 @@
 # =============================================================================
-# imbrr — example single-page well & water monitoring dashboard
+# imbrr — example well & water monitoring dashboard (two views)
 # =============================================================================
 #
+#   View 1 "Well": live status + short-term (48 h) trends.
+#   View 2 "Long-term": daily / weekly / monthly aggregates.
+#
 # PREREQUISITES
-#   The Plotly Graph Card (HACS → Frontend → "Plotly Graph Card" by dbuezas).
-#   The glance / gauge / entities / conditional cards are built in. No helpers
-#   needed — the daily cumulative graph integrates flow inside the card.
+#   Both views need the Plotly Graph Card (HACS → Frontend → "Plotly Graph
+#   Card" by dbuezas) — View 2 uses it for the reversed-axis depth bars and
+#   the built-in Statistics Graph card for the rest. The glance / gauge /
+#   entities / conditional cards are built in.
+#   The one optional helper (for pump-cycle counts) is documented above View 2.
 #
 # ENTITY NAMES
 #   This assumes your imbrr device is named "Well", giving entity ids like
@@ -117,31 +122,6 @@ views:
             heading_style: title
             icon: mdi:chart-line
 
-          # Pressure through time (hourly long-term statistics = includes backfill).
-          - type: custom:plotly-graph
-            title: Pressure history
-            hours_to_show: 48
-            refresh_interval: 60
-            entities:
-              - entity: sensor.well_pressure
-                name: Pressure
-                statistic: mean
-                period: 5minute
-                line:
-                  color: "#fd7e14"
-                  width: 2
-                fill: tozeroy
-                fillcolor: "rgba(253,126,20,0.15)"
-            layout:
-              paper_bgcolor: "rgba(0,0,0,0)"
-              plot_bgcolor: "rgba(0,0,0,0)"
-              font:
-                color: "#e1e1e1"
-              margin: { t: 30, l: 52, r: 52, b: 40 }
-              legend: { orientation: h, y: 1.15 }
-              xaxis: { gridcolor: "rgba(255,255,255,0.08)" }
-              yaxis: { gridcolor: "rgba(255,255,255,0.08)" }
-
           # Coupled water depth (left axis) and use / flow rate (right axis).
           - type: custom:plotly-graph
             title: Water depth & use
@@ -185,6 +165,31 @@ views:
                 overlaying: y
                 side: right
                 showgrid: false
+
+          # Pressure through time (5-minute long-term statistics = includes backfill).
+          - type: custom:plotly-graph
+            title: Pressure history
+            hours_to_show: 48
+            refresh_interval: 60
+            entities:
+              - entity: sensor.well_pressure
+                name: Pressure
+                statistic: mean
+                period: 5minute
+                line:
+                  color: "#fd7e14"
+                  width: 2
+                fill: tozeroy
+                fillcolor: "rgba(253,126,20,0.15)"
+            layout:
+              paper_bgcolor: "rgba(0,0,0,0)"
+              plot_bgcolor: "rgba(0,0,0,0)"
+              font:
+                color: "#e1e1e1"
+              margin: { t: 30, l: 52, r: 52, b: 40 }
+              legend: { orientation: h, y: 1.15 }
+              xaxis: { gridcolor: "rgba(255,255,255,0.08)" }
+              yaxis: { gridcolor: "rgba(255,255,255,0.08)" }
 
           # Cumulative water use, integrated from flow in-card and reset each
           # midnight. No helper needed — the fn filter sums flow * elapsed
@@ -267,3 +272,230 @@ views:
               - entity: binary_sensor.well_flow_active
                 name: Flow active
                 icon: mdi:water-pump
+
+  # ===========================================================================
+  # SECOND VIEW — long-term history (daily / weekly / monthly aggregates)
+  #
+  # Depth cards use Plotly (reversed axis); the rest use the built-in
+  # Statistics Graph card. Driven by each sensor's long-term statistics:
+  #   - Average depth   -> depth_to_water   (mean, with min/max band)
+  #   - Water use       -> total_water      (change = consumption per period)
+  #   - Avg pump rate   -> last_pump_cycle_rate (mean GPM across cycles)
+  #   - Pump cycles     -> pump_cycles      (change = cycles per period)
+  #
+  # The Pump cycles sensor counts from when the integration was installed
+  # (the release that adds it onward); it can't backfill earlier cycles.
+  # ===========================================================================
+  - title: Long-term
+    path: well-longterm
+    icon: mdi:chart-box
+    type: sections
+    max_columns: 2
+    sections:
+      - type: grid
+        cards:
+          - type: heading
+            heading: Daily (last 30 days)
+            heading_style: title
+            icon: mdi:calendar-today
+          # Depth as a stepped line (held flat across each period, not
+          # interpolated) with the min–max drawn as a shaded band, on a
+          # reversed axis (0/surface at the top) like the live view. Line shape
+          # "hv" keeps each period's value constant so the band and line align.
+          - type: custom:plotly-graph
+            title: Daily average depth (min–max band)
+            hours_to_show: 720
+            refresh_interval: 3600
+            entities:
+              - entity: sensor.well_depth_to_water
+                name: Max
+                statistic: max
+                period: day
+                showlegend: false
+                line: { width: 0, shape: hv }
+              - entity: sensor.well_depth_to_water
+                name: Daily range
+                statistic: min
+                period: day
+                fill: tonexty
+                fillcolor: "rgba(78,115,223,0.18)"
+                line: { width: 0, shape: hv }
+              - entity: sensor.well_depth_to_water
+                name: Average
+                statistic: mean
+                period: day
+                line: { color: "#4e73df", width: 2, shape: hv }
+            layout:
+              paper_bgcolor: "rgba(0,0,0,0)"
+              plot_bgcolor: "rgba(0,0,0,0)"
+              font: { color: "#e1e1e1" }
+              margin: { t: 30, l: 52, r: 20, b: 40 }
+              legend: { orientation: h, y: 1.15 }
+              xaxis: { gridcolor: "rgba(255,255,255,0.08)" }
+              yaxis:
+                title: Depth
+                autorange: reversed
+                gridcolor: "rgba(255,255,255,0.08)"
+          - type: statistics-graph
+            title: Daily water use
+            chart_type: bar
+            period: day
+            days_to_show: 30
+            stat_types:
+              - change
+            entities:
+              - sensor.well_total_water
+          - type: statistics-graph
+            title: Daily average pump rate
+            chart_type: bar
+            period: day
+            days_to_show: 30
+            stat_types:
+              - mean
+            entities:
+              - sensor.well_last_pump_cycle_rate
+          - type: statistics-graph
+            title: Daily pump cycles
+            chart_type: bar
+            period: day
+            days_to_show: 30
+            stat_types:
+              - change
+            entities:
+              - sensor.well_pump_cycles
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Weekly (last ~6 months)
+            heading_style: title
+            icon: mdi:calendar-week
+          - type: custom:plotly-graph
+            title: Weekly average depth (min–max band)
+            hours_to_show: 4320
+            refresh_interval: 3600
+            entities:
+              - entity: sensor.well_depth_to_water
+                name: Max
+                statistic: max
+                period: week
+                showlegend: false
+                line: { width: 0, shape: hv }
+              - entity: sensor.well_depth_to_water
+                name: Weekly range
+                statistic: min
+                period: week
+                fill: tonexty
+                fillcolor: "rgba(78,115,223,0.18)"
+                line: { width: 0, shape: hv }
+              - entity: sensor.well_depth_to_water
+                name: Average
+                statistic: mean
+                period: week
+                line: { color: "#4e73df", width: 2, shape: hv }
+            layout:
+              paper_bgcolor: "rgba(0,0,0,0)"
+              plot_bgcolor: "rgba(0,0,0,0)"
+              font: { color: "#e1e1e1" }
+              margin: { t: 30, l: 52, r: 20, b: 40 }
+              legend: { orientation: h, y: 1.15 }
+              xaxis: { gridcolor: "rgba(255,255,255,0.08)" }
+              yaxis:
+                title: Depth
+                autorange: reversed
+                gridcolor: "rgba(255,255,255,0.08)"
+          - type: statistics-graph
+            title: Weekly water use
+            chart_type: bar
+            period: week
+            days_to_show: 180
+            stat_types:
+              - change
+            entities:
+              - sensor.well_total_water
+          - type: statistics-graph
+            title: Weekly average pump rate
+            chart_type: bar
+            period: week
+            days_to_show: 180
+            stat_types:
+              - mean
+            entities:
+              - sensor.well_last_pump_cycle_rate
+          - type: statistics-graph
+            title: Weekly pump cycles
+            chart_type: bar
+            period: week
+            days_to_show: 180
+            stat_types:
+              - change
+            entities:
+              - sensor.well_pump_cycles
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Monthly (last year)
+            heading_style: title
+            icon: mdi:calendar-month
+          - type: custom:plotly-graph
+            title: Monthly average depth (min–max band)
+            hours_to_show: 8760
+            refresh_interval: 3600
+            entities:
+              - entity: sensor.well_depth_to_water
+                name: Max
+                statistic: max
+                period: month
+                showlegend: false
+                line: { width: 0, shape: hv }
+              - entity: sensor.well_depth_to_water
+                name: Monthly range
+                statistic: min
+                period: month
+                fill: tonexty
+                fillcolor: "rgba(78,115,223,0.18)"
+                line: { width: 0, shape: hv }
+              - entity: sensor.well_depth_to_water
+                name: Average
+                statistic: mean
+                period: month
+                line: { color: "#4e73df", width: 2, shape: hv }
+            layout:
+              paper_bgcolor: "rgba(0,0,0,0)"
+              plot_bgcolor: "rgba(0,0,0,0)"
+              font: { color: "#e1e1e1" }
+              margin: { t: 30, l: 52, r: 20, b: 40 }
+              legend: { orientation: h, y: 1.15 }
+              xaxis: { gridcolor: "rgba(255,255,255,0.08)" }
+              yaxis:
+                title: Depth
+                autorange: reversed
+                gridcolor: "rgba(255,255,255,0.08)"
+          - type: statistics-graph
+            title: Monthly water use
+            chart_type: bar
+            period: month
+            days_to_show: 365
+            stat_types:
+              - change
+            entities:
+              - sensor.well_total_water
+          - type: statistics-graph
+            title: Monthly average pump rate
+            chart_type: bar
+            period: month
+            days_to_show: 365
+            stat_types:
+              - mean
+            entities:
+              - sensor.well_last_pump_cycle_rate
+          - type: statistics-graph
+            title: Monthly pump cycles
+            chart_type: bar
+            period: month
+            days_to_show: 365
+            stat_types:
+              - change
+            entities:
+              - sensor.well_pump_cycles
