@@ -381,6 +381,106 @@ async def test_get_outflow(hass, mock_config_entry) -> None:
     assert out == pytest.approx(model.capacitance(55.0) * 0.3, rel=0.1)
 
 
+async def _outflow_coordinator(hass, mock_config_entry):
+    """Coordinator with a fitted model, seeded idle, ready for outflow tests."""
+    api = make_mock_api()
+    api.async_get_latest_depth.return_value = make_latest_depth(
+        reading_id=0, status="completed"
+    )
+    coordinator = await make_coordinator(hass, mock_config_entry, api)
+    coordinator.async_set_updated_data(await coordinator._async_update_data())
+    coordinator.ledgers[TEST_SERIAL].outflow_model = OutflowModel(
+        k=88000.0, samples=100
+    )
+    return coordinator
+
+
+async def test_flow_active_from_rising_pressure(hass, mock_config_entry) -> None:
+    """Rising tank pressure alone marks the pump active.
+
+    Even when the blob claims idle (status completed, flow 0 — e.g. its
+    fields lag a just-started event), physics wins: only the pump raises
+    tank pressure.
+    """
+    coordinator = await _outflow_coordinator(hass, mock_config_entry)
+    coordinator.handle_mqtt_message(
+        f"imbrr/{TEST_SERIAL}/state",
+        '{"pressure_psi":50.0,"flow_gpm":0.0,"flow_event_status":"completed"}',
+    )
+    assert coordinator.is_flow_active(TEST_SERIAL) is False
+
+    now = dt_util.utcnow()
+    coordinator._psi_buffer[TEST_SERIAL] = [
+        (now - timedelta(seconds=s), 50.0 - 0.2 * s) for s in (20, 15, 10, 5, 0)
+    ]
+    assert coordinator.is_flow_active(TEST_SERIAL) is True
+
+
+async def test_get_outflow_during_pump_on_with_draw(hass, mock_config_entry) -> None:
+    """While the pump runs, a concurrent draw is the refill's shortfall.
+
+    flow_in 6 gpm with pressure rising only fast enough for a net 4 gpm
+    means ~2 gpm is being drawn at the same time.
+    """
+    coordinator = await _outflow_coordinator(hass, mock_config_entry)
+    model = coordinator.ledgers[TEST_SERIAL].outflow_model
+    # Pump on: metered inflow 6 gpm (status field lies, as observed live).
+    coordinator.handle_mqtt_message(
+        f"imbrr/{TEST_SERIAL}/state",
+        '{"pressure_psi":55.0,"flow_gpm":6.0,"flow_event_status":"completed"}',
+    )
+    # 25 s into the refill; pressure rising at the net (6 - 2)/C rate.
+    now = dt_util.utcnow()
+    net_dpdt = 4.0 / model.capacitance(55.0)
+    coordinator._psi_buffer[TEST_SERIAL] = [
+        (now - timedelta(seconds=s), 55.0 - net_dpdt * s) for s in (20, 15, 10, 5, 0)
+    ]
+    coordinator._activity_changed_at[TEST_SERIAL] = now - timedelta(seconds=25)
+
+    assert coordinator.is_flow_active(TEST_SERIAL) is True
+    out = coordinator.get_outflow(TEST_SERIAL)
+    assert out == pytest.approx(2.0, abs=0.15)
+
+
+async def test_get_outflow_none_right_after_pump_transition(
+    hass, mock_config_entry
+) -> None:
+    """Just after a pump on/off flip the slope window is too short: None.
+
+    Mixing pre- and post-transition pressure into one slope would produce a
+    bogus estimate, so the sensor goes unknown for a few seconds instead.
+    """
+    coordinator = await _outflow_coordinator(hass, mock_config_entry)
+    now = dt_util.utcnow()
+    coordinator._psi_buffer[TEST_SERIAL] = [
+        (now - timedelta(seconds=s), 55.0 - 0.22 * s) for s in (20, 15, 10, 5, 0)
+    ]
+    # The pump-start was just detected (flow crossed the threshold).
+    coordinator.handle_mqtt_message(
+        f"imbrr/{TEST_SERIAL}/state",
+        '{"pressure_psi":55.0,"flow_gpm":6.0,"flow_event_status":"completed"}',
+    )
+    assert coordinator._activity_changed_at.get(TEST_SERIAL) is not None
+    assert coordinator.get_outflow(TEST_SERIAL) is None
+
+
+async def test_get_outflow_none_when_pump_on_but_inflow_unknown(
+    hass, mock_config_entry
+) -> None:
+    """Pressure rising but no inflow reading: report None, not a fake 0."""
+    coordinator = await _outflow_coordinator(hass, mock_config_entry)
+    # Only a bare pressure stream (no blob, so no flow measurement).
+    coordinator.handle_mqtt_message(f"imbrr/{TEST_SERIAL}/pressure", "55.0")
+    now = dt_util.utcnow()
+    coordinator._psi_buffer[TEST_SERIAL] = [
+        (now - timedelta(seconds=s), 55.0 - 0.22 * s) for s in (20, 15, 10, 5, 0)
+    ]
+    coordinator._activity_changed_at[TEST_SERIAL] = now - timedelta(seconds=25)
+
+    assert coordinator.is_flow_active(TEST_SERIAL) is True  # via rising pressure
+    assert coordinator.get_outflow(TEST_SERIAL) is None
+
+
 # ----------------------------------------------------------------------
 # MQTT overlay
 # ----------------------------------------------------------------------
@@ -395,11 +495,17 @@ STATE_PAYLOAD_FLOWING = (
     '{"depth_ft":120.4,"temp_f":57.6,"pressure_psi":45.1,'
     '"flow_gpm":5.20,"event_gallons":3.140,"flow_event_status":"in_progress"}'
 )
-# The device keeps publishing the pre-shutoff flow as a residual value even
-# after the event has completed (its model lags the physical shutoff).
-STATE_PAYLOAD_RESIDUAL = (
+# The blob's flow_event_status is unreliable mid-event: it keeps reporting
+# the previous event's "completed" while the pump is actually running. The
+# metered flow_gpm is the trustworthy field.
+STATE_PAYLOAD_STALE_STATUS = (
     '{"depth_ft":94.9,"temp_f":66.6,"pressure_psi":57.4,'
     '"flow_gpm":6.35,"event_gallons":0.000,"flow_event_status":"completed"}'
+)
+# A genuine post-shutoff residual: near-zero flow, completed status.
+STATE_PAYLOAD_RESIDUAL = (
+    '{"depth_ft":94.9,"temp_f":66.6,"pressure_psi":57.4,'
+    '"flow_gpm":0.30,"event_gallons":0.000,"flow_event_status":"completed"}'
 )
 
 
@@ -444,14 +550,37 @@ async def test_mqtt_json_state_sets_flow_active_and_refreshes(
     assert api.async_get_latest_depth.await_count >= 1
 
 
+async def test_metered_flow_beats_stale_completed_status(
+    hass, mock_config_entry
+) -> None:
+    """A real metered flow means active even when the status field lies.
+
+    Regression (the dead flow_rate/flow_active bug): the blob streams every
+    ~5 s so it is always fresh, and its flow_event_status keeps saying
+    "completed" while the pump runs. That status must not veto the metered
+    flow_gpm, or the sensors read 0/off all day.
+    """
+    api = make_mock_api()
+    api.async_get_latest_depth.return_value = make_latest_depth(
+        reading_id=0, status="completed"
+    )
+    coordinator = await make_coordinator(hass, mock_config_entry, api)
+    coordinator.async_set_updated_data(await coordinator._async_update_data())
+
+    coordinator.handle_mqtt_message(STATE_TOPIC, STATE_PAYLOAD_STALE_STATUS)
+
+    assert coordinator.is_flow_active(TEST_SERIAL) is True
+    assert coordinator.get_live_value(TEST_SERIAL, "flow") == 6.35
+
+
 async def test_residual_flow_reads_zero_when_not_active(
     hass, mock_config_entry
 ) -> None:
-    """A residual non-zero flow_gpm on a completed event must not stick.
+    """A sub-threshold residual flow_gpm on a completed event must not stick.
 
-    Regression: the device publishes the last flow rate over MQTT even after
-    the event completes; flow_rate must read 0 (consistent with the
-    flow_active binary sensor) rather than the stale value.
+    After shutoff the device can briefly publish a small non-zero flow_gpm;
+    once it is below the activity threshold, flow_rate must read 0
+    (consistent with the flow_active binary sensor) rather than the residue.
     """
     api = make_mock_api()
     api.async_get_latest_depth.return_value = make_latest_depth(

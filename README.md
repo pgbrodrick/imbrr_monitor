@@ -83,7 +83,9 @@ where `C(P)` is the tank's **water capacitance** (gallons of water per psi) and 
 > **flow_out = max(0, flow_in − C(P) · dP/dt)**
 
 - **Pump off** (`flow_in = 0`): drawing water drops the pressure, so `flow_out = C(P) · (−dP/dt)` — a positive draw. This is the case imbrr can't otherwise see.
-- **Pump on**: `flow_out` is the inflow net of whatever is refilling the tank.
+- **Pump on**: pressure rises, but *slower* than a clean refill would — the shortfall is the concurrent draw: `flow_out = flow_in − C(P) · dP/dt`. The metered inflow feeds the same equation, so the estimate keeps working through pump cycles instead of dropping to 0.
+
+Around a pump start/stop the pressure trend flips regimes, so the slope window is restricted to samples since the transition; the sensor briefly reads *unknown* (a few seconds) rather than mixing the two regimes into a bogus number.
 
 Because the air charge follows Boyle's law (`P · V = constant`, isothermal), the capacitance isn't constant — it falls as pressure rises:
 

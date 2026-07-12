@@ -416,10 +416,13 @@ class ImbrrLifetimeWaterSensor(ImbrrBaseEntity, RestoreEntity, SensorEntity):
 class ImbrrOutflowSensor(ImbrrBaseEntity, SensorEntity):
     """Proxy for flow OUT of the pressure tank (household draw).
 
-    Estimated from the rate of pressure change and a fitted tank model. Reads
-    unknown until the model is built (imbrr.build_outflow_model action) and the
-    pressure stream is fresh enough to estimate a slope. It's a rough estimate;
-    the draw_level attribute is the more trustworthy signal.
+    Estimated from the rate of pressure change and a fitted tank model
+    (built automatically; imbrr.build_outflow_model forces a refit). Works
+    through pump cycles by netting the metered inflow against the refill
+    rate. Reads unknown until a model exists and the pressure stream is
+    fresh enough to estimate a slope, and briefly around pump on/off
+    transitions. It's a rough estimate; the draw_level attribute is the
+    more trustworthy signal.
     """
 
     _attr_translation_key = "outflow_rate"

@@ -47,6 +47,14 @@ OUTFLOW_DAILY_K_BACKFILL_DAYS = 30
 # expressed as a multiple of the base scan interval.
 MQTT_FRESHNESS_FACTOR = 2
 
+# Flow-activity detection. The device's MQTT state blob streams every ~5 s but
+# its flow_event_status field is not trustworthy mid-event (observed always
+# "completed"), so activity is inferred from several signals: a fresh MQTT
+# flow above this rate, or tank pressure rising faster than this slope
+# (nothing but the pump raises tank pressure; a clean refill is ~+0.2 psi/s).
+ACTIVE_FLOW_GPM = 0.5
+RISING_PSI_PER_S = 0.03
+
 # Device types
 TYPE_WELL = "well"
 TYPE_CISTERN = "cistern"
