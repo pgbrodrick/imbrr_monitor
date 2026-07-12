@@ -10,7 +10,11 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import UpdateFailed
 from homeassistant.util import dt as dt_util
 
-from custom_components.imbrr.api import ImbrrAuthError, ImbrrConnectionError
+from custom_components.imbrr.api import (
+    ImbrrAuthError,
+    ImbrrConnectionError,
+    PumpCycle,
+)
 from custom_components.imbrr.const import (
     DEFAULT_FAST_SCAN_INTERVAL,
     DEFAULT_SCAN_INTERVAL,
@@ -243,6 +247,48 @@ async def test_ledger_persists_via_store(hass, mock_config_entry) -> None:
     ledger = rebuilt.ledgers[TEST_SERIAL]
     assert ledger.lifetime_gallons == pytest.approx(7.0)
     assert ledger.last_processed_reading_id == 2
+
+
+def _cycle(minutes_ago: int) -> PumpCycle:
+    return PumpCycle(
+        time=NOW - timedelta(minutes=minutes_ago),
+        gpm=5.0,
+        trimmed_gpm=5.0,
+        gallons=8.0,
+        duration_seconds=110,
+        start_psi=44.0,
+        stop_psi=66.0,
+    )
+
+
+async def test_pump_cycle_counter(hass, mock_config_entry) -> None:
+    """Pump cycles are counted monotonically from install, no double count."""
+    coordinator = await make_coordinator(hass, mock_config_entry)
+    device = coordinator.devices[0]
+    data = coordinator._device_data[device.serial]
+    ledger = coordinator.ledgers[device.serial]
+
+    # First observation only sets the watermark (pre-existing history isn't counted).
+    coordinator._count_new_pump_cycles(device, data, [_cycle(60), _cycle(120)])
+    assert ledger.pump_cycles_total == 0
+    assert data.pump_cycles_total == 0
+
+    # Two cycles newer than the watermark appear -> +2.
+    coordinator._count_new_pump_cycles(
+        device, data, [_cycle(5), _cycle(30), _cycle(60), _cycle(120)]
+    )
+    assert ledger.pump_cycles_total == 2
+    assert data.pump_cycles_total == 2
+
+    # Re-observing the same window does not double count.
+    coordinator._count_new_pump_cycles(
+        device, data, [_cycle(5), _cycle(30), _cycle(60), _cycle(120)]
+    )
+    assert ledger.pump_cycles_total == 2
+
+    # No cycles is a no-op.
+    coordinator._count_new_pump_cycles(device, data, [])
+    assert ledger.pump_cycles_total == 2
 
 
 # ----------------------------------------------------------------------

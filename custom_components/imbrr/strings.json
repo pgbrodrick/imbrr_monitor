@@ -63,6 +63,7 @@
       "pressure": { "name": "Pressure" },
       "current_event_gallons": { "name": "Current event water" },
       "total_water": { "name": "Total water" },
+      "pump_cycles": { "name": "Pump cycles" },
       "last_reading": { "name": "Last reading" },
       "last_pump_cycle_gpm": { "name": "Last pump cycle rate" },
       "last_pump_cycle_gallons": { "name": "Last pump cycle water" },
