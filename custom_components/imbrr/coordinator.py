@@ -46,6 +46,7 @@ from .api import (
     PumpCycle,
 )
 from .const import (
+    ACTIVE_FLOW_GPM,
     CONF_FAST_POLLING_ENABLED,
     CONF_FAST_SCAN_INTERVAL,
     CONF_SCAN_INTERVAL,
@@ -53,6 +54,7 @@ from .const import (
     DEFAULT_FAST_SCAN_INTERVAL,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    FLOW_ACTIVE_STATUSES,
     MQTT_FRESHNESS_FACTOR,
     MQTT_STATE_JSON_MAP,
     MQTT_STATE_STATUS_FIELD,
@@ -60,6 +62,7 @@ from .const import (
     MODEL_REFIT_DAYS,
     OUTFLOW_MODEL_DAYS,
     PUMP_CYCLE_REFRESH_SECONDS,
+    RISING_PSI_PER_S,
     STORAGE_VERSION,
     TYPE_CISTERN,
 )
@@ -188,6 +191,10 @@ class ImbrrCoordinator(DataUpdateCoordinator[dict[str, ImbrrDeviceData]]):
         # Recent (timestamp, psi) samples per device for the outflow proxy's
         # real-time pressure slope. Fed mostly by the MQTT pressure stream.
         self._psi_buffer: dict[str, list[tuple[datetime, float]]] = {}
+        # Last known pump-activity state and when it flipped, so the outflow
+        # slope can be restricted to samples from the current regime.
+        self._activity_state: dict[str, bool] = {}
+        self._activity_changed_at: dict[str, datetime] = {}
         # History ingestion writes statistics onto the sensor entities, which
         # do not exist during the first refresh. It is enabled once the
         # platforms are set up (see __init__.async_setup_entry).
@@ -312,8 +319,16 @@ class ImbrrCoordinator(DataUpdateCoordinator[dict[str, ImbrrDeviceData]]):
         self, device: ImbrrDevice, data: ImbrrDeviceData
     ) -> None:
         """Populate instantaneous flow/psi/temp from the active flow event."""
-        if not data.flow_in_progress:
+        active = self._data_flow_active(data)
+        self._track_activity(device.serial, active)
+        if not active:
             data.live["flow"] = 0.0
+            return
+        if not data.flow_in_progress:
+            # MQTT sees the event but the cloud hasn't registered it yet:
+            # latest_flow_event would return the *previous* event's rows
+            # (stale flow, and a stale psi that would corrupt the slope
+            # buffer). The fresh overlay is what made us active anyway.
             return
         try:
             rows = await self.api.async_get_latest_flow_event(device.serial)
@@ -576,11 +591,9 @@ class ImbrrCoordinator(DataUpdateCoordinator[dict[str, ImbrrDeviceData]]):
         # A reading that shows the well is now active while we thought it was
         # idle means an event just started: refresh now instead of waiting out
         # the base interval.
-        flow = readings.get("flow")
-        started = (self._data_flow_active(data) and not was_active) or (
-            flow is not None and flow > 0 and not was_active
-        )
-        if started:
+        now_active = self._data_flow_active(data)
+        self._track_activity(serial, now_active)
+        if now_active and not was_active:
             self.hass.async_create_task(self.async_request_refresh())
 
     def _match_mqtt_device(self, topic: str) -> str | None:
@@ -593,19 +606,69 @@ class ImbrrCoordinator(DataUpdateCoordinator[dict[str, ImbrrDeviceData]]):
             return self.devices[0].serial
         return None
 
+    def _fresh_mqtt(self, data: ImbrrDeviceData, key: str) -> float | None:
+        """The MQTT overlay value for ``key`` if it is fresh enough to trust."""
+        overlay = data.mqtt.get(key)
+        if overlay is None:
+            return None
+        value, received = overlay
+        max_age = self._base_interval * MQTT_FRESHNESS_FACTOR
+        if (dt_util.utcnow() - received).total_seconds() <= max_age:
+            return value
+        return None
+
     def _data_flow_active(self, data: ImbrrDeviceData) -> bool:
-        """Whether the well is flowing, preferring a fresh MQTT status."""
+        """Whether the well is pumping, combining several signals.
+
+        The device's MQTT state blob streams every ~5 s, so it is always
+        "fresh" and effectively decides — but its firmware reports "active"
+        where the cloud API says "in_progress" (captured live), so the
+        status is matched against both vocabularies, and is backed up by
+        two signals that don't depend on it at all: a fresh MQTT flow above
+        threshold, and tank pressure rising (only the pump raises tank
+        pressure). A coherent set of fresh idle readings (terminal status
+        AND flow ~0) ends the event immediately instead of waiting out the
+        next poll; without MQTT, the polled API status decides.
+        """
+        now = dt_util.utcnow()
+        status: str | None = None
         if data.mqtt_status is not None:
-            status, received = data.mqtt_status
+            candidate, received = data.mqtt_status
             max_age = self._base_interval * MQTT_FRESHNESS_FACTOR
-            if (dt_util.utcnow() - received).total_seconds() <= max_age:
-                return status == "in_progress"
+            if (now - received).total_seconds() <= max_age:
+                status = candidate
+        if status in FLOW_ACTIVE_STATUSES:
+            return True
+
+        flow = self._fresh_mqtt(data, "flow")
+        if flow is not None and flow >= ACTIVE_FLOW_GPM:
+            return True
+
+        dpdt = pressure_slope(self._psi_buffer.get(data.device.serial, []), now)
+        if dpdt is not None and dpdt >= RISING_PSI_PER_S:
+            return True
+
+        if status is not None and flow is not None:
+            # Fresh MQTT says idle (flow ~0, no in_progress, pressure not
+            # rising): trust it over a possibly stale polled status.
+            return False
         return data.flow_in_progress
+
+    def _track_activity(self, serial: str, active: bool) -> None:
+        """Record pump on/off transitions (for the outflow slope window)."""
+        previous = self._activity_state.get(serial)
+        self._activity_state[serial] = active
+        if previous is not None and previous != active:
+            self._activity_changed_at[serial] = dt_util.utcnow()
 
     def is_flow_active(self, serial: str) -> bool:
         """Public flow-active state for a device (used by the binary sensor)."""
         data = self.data.get(serial) if self.data else self._device_data.get(serial)
-        return self._data_flow_active(data) if data is not None else False
+        if data is None:
+            return False
+        active = self._data_flow_active(data)
+        self._track_activity(serial, active)
+        return active
 
     def get_live_value(self, serial: str, key: str) -> float | None:
         """Return the freshest value for a live metric (MQTT beats polling)."""
@@ -651,20 +714,45 @@ class ImbrrCoordinator(DataUpdateCoordinator[dict[str, ImbrrDeviceData]]):
     def get_outflow(self, serial: str) -> float | None:
         """Estimated flow OUT of the tank (gpm), or None if not computable.
 
-        Needs a fitted model (build via the imbrr.build_outflow_model action),
-        a current pressure, and enough recent pressure samples to estimate the
-        slope — which in practice means the device's MQTT stream is active.
+        Needs a fitted model (built automatically, or via the
+        imbrr.build_outflow_model action), a current pressure, and enough
+        recent pressure samples to estimate the slope — which in practice
+        means the device's MQTT stream is active.
+
+        Works through pump cycles: while the pump runs, the estimate is
+        ``flow_in - C(P)*dP/dt`` with the metered inflow, so a concurrent
+        draw shows up as the refill's shortfall from a clean rise. Around a
+        pump on/off transition the slope window is restricted to the current
+        regime; briefly returns None until enough post-transition samples
+        exist rather than mixing regimes into a bogus number.
         """
         ledger = self.ledgers.get(serial)
         if ledger is None or ledger.outflow_model is None:
             return None
+        data = self.data.get(serial) if self.data else self._device_data.get(serial)
+        if data is None:
+            return None
         psi = self.get_live_value(serial, "psi")
         if psi is None:
             return None
-        dpdt = pressure_slope(self._psi_buffer.get(serial, []), dt_util.utcnow())
+
+        now = dt_util.utcnow()
+        active = self._data_flow_active(data)
+        self._track_activity(serial, active)
+        changed_at = self._activity_changed_at.get(serial)
+        dpdt = pressure_slope(self._psi_buffer.get(serial, []), now, since=changed_at)
         if dpdt is None:
             return None
-        flow_in = self.get_live_value(serial, "flow") or 0.0
+
+        if active:
+            flow_in = self.get_live_value(serial, "flow")
+            if not flow_in:
+                # Pump is running (pressure rising) but the inflow reading
+                # hasn't arrived yet — the balance can't be computed, and
+                # reporting 0 here is what made draws vanish mid-refill.
+                return None
+        else:
+            flow_in = 0.0
         return estimate_outflow(ledger.outflow_model, psi, flow_in, dpdt)
 
     async def async_build_outflow_model(self, days: int) -> dict[str, Any]:

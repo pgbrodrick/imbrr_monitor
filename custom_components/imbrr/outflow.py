@@ -127,14 +127,21 @@ def fit_outflow_k(
 
 
 def pressure_slope(
-    samples: Sequence[tuple[datetime, float]], now: datetime
+    samples: Sequence[tuple[datetime, float]],
+    now: datetime,
+    since: datetime | None = None,
 ) -> float | None:
     """Least-squares dP/dt (psi/s) over the last ``SLOPE_WINDOW_S`` seconds.
 
+    ``since`` further restricts the window (used to drop samples from before
+    a pump on/off transition, which belong to a different pressure regime).
     Returns ``None`` if there are too few samples or too short a span to trust.
     """
     window = [
-        (t, p) for t, p in samples if (now - t).total_seconds() <= SLOPE_WINDOW_S
+        (t, p)
+        for t, p in samples
+        if (now - t).total_seconds() <= SLOPE_WINDOW_S
+        and (since is None or t >= since)
     ]
     if len(window) < _MIN_SLOPE_SAMPLES:
         return None
