@@ -14,7 +14,7 @@
 #
 # ENTITY NAMES
 #   imbrr entity ids are fixed and independent of the device's display name:
-#   sensor.imbrr_depth_to_water, sensor.imbrr_outflow_rate, etc. — so this
+#   sensor.imbrr_depth_to_water, sensor.imbrr_outflow_rate_estimated, etc. — so this
 #   dashboard works as-is, no find/replace needed. (Only if you have more than
 #   one imbrr device do the second device's shared metrics get an "_2" suffix;
 #   open any imbrr entity → settings to see its exact entity_id.)
@@ -55,8 +55,8 @@ views:
               content: >
                 ## 💧 Pump running — {{ states('sensor.imbrr_flow_rate') }}
                 {{ state_attr('sensor.imbrr_flow_rate','unit_of_measurement') }}
-                &nbsp;·&nbsp; {{ states('sensor.imbrr_current_event_gallons') }}
-                {{ state_attr('sensor.imbrr_current_event_gallons','unit_of_measurement') }}
+                &nbsp;·&nbsp; {{ states('sensor.imbrr_current_event_water') }}
+                {{ state_attr('sensor.imbrr_current_event_water','unit_of_measurement') }}
                 this event
 
           # At-a-glance status with explicit icons.
@@ -81,12 +81,12 @@ views:
               - entity: sensor.imbrr_water_temperature
                 name: Temp
                 icon: mdi:thermometer-water
-              - entity: sensor.imbrr_current_event_gallons
+              - entity: sensor.imbrr_current_event_water
                 name: This event
                 icon: mdi:cup-water
               # Estimated flow OUT of the pressure tank (household draw).
               # Reads unknown until you run the imbrr.build_outflow_model action.
-              - entity: sensor.imbrr_outflow_rate
+              - entity: sensor.imbrr_outflow_rate_estimated
                 name: Out (est)
                 icon: mdi:water-minus
 
@@ -120,7 +120,7 @@ views:
                 min: 0
                 max: 10
               - type: gauge
-                entity: sensor.imbrr_outflow_rate
+                entity: sensor.imbrr_outflow_rate_estimated
                 name: Outflow (est)
                 needle: true
                 min: 0
@@ -316,11 +316,11 @@ views:
               - entity: sensor.imbrr_total_water
                 name: Total water (lifetime)
                 icon: mdi:cup-water
-              - entity: sensor.imbrr_current_event_gallons
+              - entity: sensor.imbrr_current_event_water
                 icon: mdi:water-plus
               - entity: sensor.imbrr_water_temperature
                 icon: mdi:thermometer-water
-              - entity: sensor.imbrr_outflow_rate
+              - entity: sensor.imbrr_outflow_rate_estimated
                 name: Outflow (estimated)
                 icon: mdi:water-minus
               - entity: sensor.imbrr_outflow_k
