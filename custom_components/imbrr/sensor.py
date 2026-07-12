@@ -32,6 +32,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import BASE_URL, DOMAIN, MANUFACTURER, MODEL, TYPE_CISTERN, TYPE_WELL
 from .coordinator import ImbrrCoordinator, ImbrrDeviceData
+from .outflow import draw_level
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -137,6 +138,17 @@ SENSOR_DESCRIPTIONS: tuple[ImbrrSensorDescription, ...] = (
         device_class=SensorDeviceClass.TIMESTAMP,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=_latest_timestamp,
+    ),
+    # Fitted tank coefficient k (daily fit; tracks drift over time). Diagnostic.
+    ImbrrSensorDescription(
+        key="outflow_k",
+        translation_key="outflow_k",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        icon="mdi:tune-variant",
+        suggested_display_precision=0,
+        device_types=(TYPE_WELL,),
+        value_fn=lambda c, d: d.outflow_k,
     ),
     # Last pump cycle summary (well devices; fails soft if the fetch errors)
     # Persistent, monotonic pump-cycle count (drives daily/weekly/monthly
@@ -283,6 +295,8 @@ async def async_setup_entry(
                 continue
             entities.append(ImbrrSensor(coordinator, device.serial, description))
         entities.append(ImbrrLifetimeWaterSensor(coordinator, device.serial))
+        if device.device_type == TYPE_WELL:
+            entities.append(ImbrrOutflowSensor(coordinator, device.serial))
     async_add_entities(entities)
 
 
@@ -386,3 +400,45 @@ class ImbrrLifetimeWaterSensor(ImbrrBaseEntity, RestoreEntity, SensorEntity):
     @property
     def native_value(self) -> float:
         return round(self.device_data.lifetime_gallons, 3)
+
+
+class ImbrrOutflowSensor(ImbrrBaseEntity, SensorEntity):
+    """Proxy for flow OUT of the pressure tank (household draw).
+
+    Estimated from the rate of pressure change and a fitted tank model. Reads
+    unknown until the model is built (imbrr.build_outflow_model action) and the
+    pressure stream is fresh enough to estimate a slope. It's a rough estimate;
+    the draw_level attribute is the more trustworthy signal.
+    """
+
+    _attr_translation_key = "outflow_rate"
+    _attr_device_class = SensorDeviceClass.VOLUME_FLOW_RATE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfVolumeFlowRate.GALLONS_PER_MINUTE
+    _attr_suggested_display_precision = 1
+    _attr_icon = "mdi:water-minus"
+
+    def __init__(self, coordinator: ImbrrCoordinator, serial: str) -> None:
+        super().__init__(coordinator, serial)
+        self._attr_unique_id = f"{serial}_outflow_rate"
+
+    @property
+    def native_value(self) -> float | None:
+        value = self.coordinator.get_outflow(self._serial)
+        return round(value, 2) if value is not None else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        value = self.coordinator.get_outflow(self._serial)
+        ledger = self.coordinator.ledgers.get(self._serial)
+        model = ledger.outflow_model if ledger else None
+        attrs: dict[str, Any] = {
+            "draw_level": draw_level(value) if value is not None else None,
+            "model_fitted": model is not None,
+        }
+        if model is not None:
+            attrs["model_k"] = round(model.k)
+            attrs["model_samples"] = model.samples
+            if model.fitted_at is not None:
+                attrs["model_fitted_at"] = model.fitted_at.isoformat()
+        return attrs

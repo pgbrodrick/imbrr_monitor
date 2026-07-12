@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from datetime import datetime
+from datetime import date, datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.recorder.statistics import async_import_statistics
@@ -171,3 +171,32 @@ async def async_import_readings(
             len(stats),
             entity_id,
         )
+
+
+def async_import_daily_k(
+    hass: HomeAssistant, device: ImbrrDevice, series: dict[date, float]
+) -> None:
+    """Import a per-day k series onto the Outflow model k sensor's statistics."""
+    if "recorder" not in hass.config.components or not series:
+        return
+    entity_id = _entity_id(hass, device.serial, "outflow_k")
+    if entity_id is None:
+        return
+    stats = [
+        {
+            "start": datetime(d.year, d.month, d.day, tzinfo=timezone.utc),
+            "mean": series[d],
+            "min": series[d],
+            "max": series[d],
+        }
+        for d in sorted(series)
+    ]
+    metadata = {
+        "has_sum": False,
+        "name": None,
+        "source": "recorder",
+        "statistic_id": entity_id,
+        "unit_of_measurement": None,
+        **_MEAN_KWARGS,
+    }
+    async_import_statistics(hass, metadata, stats)

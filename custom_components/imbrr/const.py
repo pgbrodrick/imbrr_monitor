@@ -37,6 +37,12 @@ MAX_BACKFILL_DAYS = 365
 # How often to refresh the pump-cycle summary
 PUMP_CYCLE_REFRESH_SECONDS = 15 * 60
 
+# Outflow model: trailing window for a full fit, how often to promote a fresh
+# fit into the live model, and how much daily-k history to backfill.
+OUTFLOW_MODEL_DAYS = 30
+MODEL_REFIT_DAYS = 7
+OUTFLOW_DAILY_K_BACKFILL_DAYS = 30
+
 # How long an MQTT-pushed value is preferred over the polled cloud value,
 # expressed as a multiple of the base scan interval.
 MQTT_FRESHNESS_FACTOR = 2

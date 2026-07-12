@@ -4,14 +4,21 @@ from __future__ import annotations
 
 import logging
 from dataclasses import asdict
+from datetime import timedelta
 
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD, Platform
-from homeassistant.core import HomeAssistant, ServiceCall, callback
+from homeassistant.core import (
+    HomeAssistant,
+    ServiceCall,
+    SupportsResponse,
+    callback,
+)
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import aiohttp_client
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util
 
 from .api import ImbrrApiClient, ImbrrDevice
@@ -25,6 +32,7 @@ from .const import (
     DEFAULT_MQTT_ENABLED,
     DEFAULT_MQTT_TOPIC,
     DOMAIN,
+    OUTFLOW_DAILY_K_BACKFILL_DAYS,
 )
 from .coordinator import ImbrrCoordinator
 
@@ -33,10 +41,14 @@ _LOGGER = logging.getLogger(__name__)
 PLATFORMS = [Platform.BINARY_SENSOR, Platform.SENSOR]
 
 SERVICE_IMPORT_HISTORY = "import_history"
+SERVICE_BUILD_OUTFLOW_MODEL = "build_outflow_model"
 ATTR_DAYS = "days"
-IMPORT_HISTORY_SCHEMA = vol.Schema(
+_DAYS_SCHEMA = vol.Schema(
     {vol.Optional(ATTR_DAYS): vol.All(vol.Coerce(int), vol.Range(min=1, max=365))}
 )
+IMPORT_HISTORY_SCHEMA = _DAYS_SCHEMA
+BUILD_OUTFLOW_MODEL_SCHEMA = _DAYS_SCHEMA
+DEFAULT_OUTFLOW_MODEL_DAYS = 30
 
 type ImbrrConfigEntry = ConfigEntry[ImbrrCoordinator]
 
@@ -113,12 +125,33 @@ async def async_setup_entry(hass: HomeAssistant, entry: ImbrrConfigEntry) -> boo
         name=f"{DOMAIN}_initial_ingest_{entry.entry_id}",
     )
 
+    # Outflow model: build/refresh it and backfill the daily-k tracker in the
+    # background, then keep it fresh once a day (weekly model refit inside).
+    entry.async_create_background_task(
+        hass,
+        _async_initial_outflow(coordinator),
+        name=f"{DOMAIN}_initial_outflow_{entry.entry_id}",
+    )
+
+    async def _outflow_tick(_now) -> None:
+        await coordinator.async_outflow_maintenance()
+
+    entry.async_on_unload(
+        async_track_time_interval(hass, _outflow_tick, timedelta(days=1))
+    )
+
     await _async_setup_mqtt(hass, entry, coordinator)
 
     _async_register_services(hass)
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     return True
+
+
+async def _async_initial_outflow(coordinator: ImbrrCoordinator) -> None:
+    """Build/refresh the outflow model and backfill the daily-k history once."""
+    await coordinator.async_outflow_maintenance()
+    await coordinator.async_backfill_daily_k(OUTFLOW_DAILY_K_BACKFILL_DAYS)
 
 
 @callback
@@ -146,6 +179,24 @@ def _async_register_services(hass: HomeAssistant) -> None:
         SERVICE_IMPORT_HISTORY,
         _handle_import_history,
         schema=IMPORT_HISTORY_SCHEMA,
+    )
+
+    async def _handle_build_outflow_model(call: ServiceCall) -> dict:
+        days = call.data.get(ATTR_DAYS, DEFAULT_OUTFLOW_MODEL_DAYS)
+        result: dict = {}
+        for entry in hass.config_entries.async_entries(DOMAIN):
+            if entry.state is not ConfigEntryState.LOADED:
+                continue
+            coordinator: ImbrrCoordinator = entry.runtime_data
+            result.update(await coordinator.async_build_outflow_model(days))
+        return {"devices": result}
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_BUILD_OUTFLOW_MODEL,
+        _handle_build_outflow_model,
+        schema=BUILD_OUTFLOW_MODEL_SCHEMA,
+        supports_response=SupportsResponse.OPTIONAL,
     )
 
 
@@ -194,6 +245,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ImbrrConfigEntry) -> bo
             if other.entry_id != entry.entry_id
             and other.state is ConfigEntryState.LOADED
         ]
-        if not remaining and hass.services.has_service(DOMAIN, SERVICE_IMPORT_HISTORY):
-            hass.services.async_remove(DOMAIN, SERVICE_IMPORT_HISTORY)
+        if not remaining:
+            for service in (SERVICE_IMPORT_HISTORY, SERVICE_BUILD_OUTFLOW_MODEL):
+                if hass.services.has_service(DOMAIN, service):
+                    hass.services.async_remove(DOMAIN, service)
     return unload_ok

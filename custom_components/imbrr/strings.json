@@ -59,6 +59,8 @@
     "sensor": {
       "depth_to_water": { "name": "Depth to water" },
       "flow_rate": { "name": "Flow rate" },
+      "outflow_rate": { "name": "Outflow rate (estimated)" },
+      "outflow_k": { "name": "Outflow model k (daily fit)" },
       "water_temperature": { "name": "Water temperature" },
       "pressure": { "name": "Pressure" },
       "current_event_gallons": { "name": "Current event water" },
@@ -90,6 +92,16 @@
         "days": {
           "name": "Days",
           "description": "How many days back to re-import. Defaults to the integration's configured backfill window."
+        }
+      }
+    },
+    "build_outflow_model": {
+      "name": "Build outflow model",
+      "description": "Fit the pressure-tank model from historical readings so the estimated Outflow rate sensor can work. Safe to re-run to refresh the fit; returns a summary of what was fit.",
+      "fields": {
+        "days": {
+          "name": "Days",
+          "description": "How many days of history to fit from (default 30)."
         }
       }
     }
