@@ -60,6 +60,7 @@
       "depth_to_water": { "name": "Depth to water" },
       "flow_rate": { "name": "Flow rate" },
       "outflow_rate": { "name": "Outflow rate (estimated)" },
+      "outflow_k": { "name": "Outflow model k (daily fit)" },
       "water_temperature": { "name": "Water temperature" },
       "pressure": { "name": "Pressure" },
       "current_event_gallons": { "name": "Current event water" },

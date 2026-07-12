@@ -57,6 +57,8 @@ from .const import (
     MQTT_STATE_JSON_MAP,
     MQTT_STATE_STATUS_FIELD,
     MQTT_TOPIC_KEY_MAP,
+    MODEL_REFIT_DAYS,
+    OUTFLOW_MODEL_DAYS,
     PUMP_CYCLE_REFRESH_SECONDS,
     STORAGE_VERSION,
     TYPE_CISTERN,
@@ -68,7 +70,7 @@ from .outflow import (
     fit_outflow_k,
     pressure_slope,
 )
-from .statistics import async_import_readings
+from .statistics import async_import_daily_k, async_import_readings
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -86,6 +88,9 @@ class DeviceLedger:
     pump_cycles_total: int = 0
     last_cycle_ts: datetime | None = None
     outflow_model: OutflowModel | None = None
+    # Latest single-day k fit (the tracker) and when the model was last refit.
+    daily_k: float | None = None
+    last_model_refit: datetime | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -102,10 +107,15 @@ class DeviceLedger:
             "outflow_model": (
                 self.outflow_model.as_dict() if self.outflow_model else None
             ),
+            "daily_k": self.daily_k,
+            "last_model_refit": (
+                self.last_model_refit.isoformat() if self.last_model_refit else None
+            ),
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> DeviceLedger:
+        daily_k = data.get("daily_k")
         return cls(
             lifetime_gallons=float(data.get("lifetime_gallons", 0.0)),
             last_processed_reading_id=int(data.get("last_processed_reading_id", 0)),
@@ -113,6 +123,8 @@ class DeviceLedger:
             backfill_done=bool(data.get("backfill_done", False)),
             pump_cycles_total=int(data.get("pump_cycles_total", 0)),
             last_cycle_ts=_parse_iso(data.get("last_cycle_ts")),
+            daily_k=float(daily_k) if daily_k is not None else None,
+            last_model_refit=_parse_iso(data.get("last_model_refit")),
             outflow_model=OutflowModel.from_dict(data.get("outflow_model")),
         )
 
@@ -138,6 +150,7 @@ class ImbrrDeviceData:
     lifetime_gallons: float = 0.0
     last_pump_cycle: PumpCycle | None = None
     pump_cycles_total: int = 0
+    outflow_k: float | None = None
     flow_in_progress: bool = False
     mqtt: dict[str, tuple[float, datetime]] = field(default_factory=dict)
     mqtt_status: tuple[str, datetime] | None = None
@@ -686,6 +699,7 @@ class ImbrrCoordinator(DataUpdateCoordinator[dict[str, ImbrrDeviceData]]):
                 summary[device.serial] = {"fitted": False, "readings": len(rows)}
                 continue
             ledger.outflow_model = model
+            ledger.last_model_refit = now
             _LOGGER.info(
                 "imbrr %s: fitted outflow model k=%.0f from %d clean samples",
                 device.serial,
@@ -700,6 +714,73 @@ class ImbrrCoordinator(DataUpdateCoordinator[dict[str, ImbrrDeviceData]]):
             }
         self._schedule_save()
         return summary
+
+    async def async_outflow_maintenance(self) -> None:
+        """Daily upkeep of the outflow model (scheduled + at setup).
+
+        Refreshes the daily-k tracker every run, and promotes a fresh 30-day
+        model fit at most weekly (keeping the estimate stable while the tracker
+        shows drift daily). Runs quietly; failures are logged, not raised.
+        """
+        for device in self.devices:
+            ledger = self.ledgers.setdefault(device.serial, DeviceLedger())
+            due = (
+                ledger.outflow_model is None
+                or ledger.last_model_refit is None
+                or (dt_util.utcnow() - ledger.last_model_refit)
+                >= timedelta(days=MODEL_REFIT_DAYS)
+            )
+            if due:
+                await self.async_build_outflow_model(OUTFLOW_MODEL_DAYS)
+            await self._async_track_daily_k(device)
+
+    async def _async_track_daily_k(self, device: ImbrrDevice) -> None:
+        """Fit k over the most recent full local day and record it."""
+        tz = self.api.timezone
+        day = (dt_util.utcnow().astimezone(tz) - timedelta(days=1)).date()
+        try:
+            rows = await self.api.async_get_readings_since_date(
+                device.serial, day, day
+            )
+        except ImbrrError as err:
+            _LOGGER.debug("daily-k fetch failed for %s: %s", device.serial, err)
+            return
+        model = fit_outflow_k(rows[0] if isinstance(rows, tuple) else rows)
+        if model is None:
+            return
+        ledger = self.ledgers.setdefault(device.serial, DeviceLedger())
+        ledger.daily_k = model.k
+        self._device_data[device.serial].outflow_k = model.k
+        async_import_daily_k(self.hass, device, {day: model.k})
+        self._schedule_save()
+
+    async def async_backfill_daily_k(self, days: int) -> None:
+        """Fit and record a per-day k series for the last ``days`` (history)."""
+        tz = self.api.timezone
+        now = dt_util.utcnow()
+        start = (now - timedelta(days=days)).astimezone(tz).date()
+        end = now.astimezone(tz).date()
+        for device in self.devices:
+            try:
+                rows = await self._async_drain_since_date(device.serial, start, end)
+            except ImbrrError as err:
+                _LOGGER.debug("daily-k backfill fetch failed for %s: %s", device.serial, err)
+                continue
+            by_day: dict[date, list] = {}
+            for r in rows:
+                by_day.setdefault(r.timestamp.astimezone(tz).date(), []).append(r)
+            series: dict[date, float] = {}
+            for d, day_rows in by_day.items():
+                model = fit_outflow_k(day_rows)
+                if model is not None:
+                    series[d] = model.k
+            if series:
+                async_import_daily_k(self.hass, device, series)
+                latest = max(series)
+                ledger = self.ledgers.setdefault(device.serial, DeviceLedger())
+                ledger.daily_k = series[latest]
+                self._device_data[device.serial].outflow_k = series[latest]
+        self._schedule_save()
 
 
 def _coerce_float(value: Any) -> float | None:

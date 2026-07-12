@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import asdict
+from datetime import timedelta
 
 import voluptuous as vol
 
@@ -17,6 +18,7 @@ from homeassistant.core import (
 )
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import aiohttp_client
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util
 
 from .api import ImbrrApiClient, ImbrrDevice
@@ -30,6 +32,7 @@ from .const import (
     DEFAULT_MQTT_ENABLED,
     DEFAULT_MQTT_TOPIC,
     DOMAIN,
+    OUTFLOW_DAILY_K_BACKFILL_DAYS,
 )
 from .coordinator import ImbrrCoordinator
 
@@ -122,12 +125,33 @@ async def async_setup_entry(hass: HomeAssistant, entry: ImbrrConfigEntry) -> boo
         name=f"{DOMAIN}_initial_ingest_{entry.entry_id}",
     )
 
+    # Outflow model: build/refresh it and backfill the daily-k tracker in the
+    # background, then keep it fresh once a day (weekly model refit inside).
+    entry.async_create_background_task(
+        hass,
+        _async_initial_outflow(coordinator),
+        name=f"{DOMAIN}_initial_outflow_{entry.entry_id}",
+    )
+
+    async def _outflow_tick(_now) -> None:
+        await coordinator.async_outflow_maintenance()
+
+    entry.async_on_unload(
+        async_track_time_interval(hass, _outflow_tick, timedelta(days=1))
+    )
+
     await _async_setup_mqtt(hass, entry, coordinator)
 
     _async_register_services(hass)
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     return True
+
+
+async def _async_initial_outflow(coordinator: ImbrrCoordinator) -> None:
+    """Build/refresh the outflow model and backfill the daily-k history once."""
+    await coordinator.async_outflow_maintenance()
+    await coordinator.async_backfill_daily_k(OUTFLOW_DAILY_K_BACKFILL_DAYS)
 
 
 @callback

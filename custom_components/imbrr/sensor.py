@@ -139,6 +139,17 @@ SENSOR_DESCRIPTIONS: tuple[ImbrrSensorDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=_latest_timestamp,
     ),
+    # Fitted tank coefficient k (daily fit; tracks drift over time). Diagnostic.
+    ImbrrSensorDescription(
+        key="outflow_k",
+        translation_key="outflow_k",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        icon="mdi:tune-variant",
+        suggested_display_precision=0,
+        device_types=(TYPE_WELL,),
+        value_fn=lambda c, d: d.outflow_k,
+    ),
     # Last pump cycle summary (well devices; fails soft if the fetch errors)
     # Persistent, monotonic pump-cycle count (drives daily/weekly/monthly
     # cycle statistics; counts from install forward).

@@ -68,12 +68,41 @@ The Depth to water, Flow rate, Pressure, and Water temperature sensors get **hou
 
 ## Estimated tank outflow (household draw)
 
-The imbrr meter measures flow *into* your pressure tank; it can't see water you draw *out* — especially when the pump is off, when it reads 0. The optional **Outflow rate (estimated)** sensor infers your household draw from how fast tank pressure changes, using a one-time model fit from your own history.
+The imbrr meter measures flow *into* your pressure tank; it can't see water you draw *out* — especially when the pump is off, when it reads 0. The optional **Outflow rate (estimated)** sensor infers your household draw from how fast tank pressure changes.
 
-1. Run **Developer tools → Actions → *imbrr: Build outflow model*** (optionally set `days`, default 30). It fits a pressure-tank model from your readings and returns a summary. Re-run it anytime to refresh the fit.
-2. The **Outflow rate (estimated)** sensor then estimates flow out of the tank in real time. It needs the device's **MQTT pressure stream** for enough resolution, and reads *unknown* until a model exists and pressure is updating.
+### The physics
 
-It's a **rough proxy** (roughly ±2–4 gpm), so the numeric value is best for a glance; the sensor's `draw_level` attribute (none/low/moderate/high) is the more trustworthy signal for automations. It's most useful for seeing draw while the pump is off, which is otherwise invisible.
+A pressure tank stores water against a compressed air charge, so its pressure and stored volume move together. Over any short interval:
+
+```
+flow_in − flow_out = C(P) · dP/dt
+```
+
+where `C(P)` is the tank's **water capacitance** (gallons of water per psi) and `dP/dt` is the rate of pressure change. `flow_in` is what the imbrr meter reports; solving for the unknown:
+
+> **flow_out = max(0, flow_in − C(P) · dP/dt)**
+
+- **Pump off** (`flow_in = 0`): drawing water drops the pressure, so `flow_out = C(P) · (−dP/dt)` — a positive draw. This is the case imbrr can't otherwise see.
+- **Pump on**: `flow_out` is the inflow net of whatever is refilling the tank.
+
+Because the air charge follows Boyle's law (`P · V = constant`, isothermal), the capacitance isn't constant — it falls as pressure rises:
+
+```
+C(P) = k / P_abs²        (P_abs = gauge psi + 14.7)
+```
+
+so the whole model reduces to **one fitted constant `k`** (physically the air pre-charge, pressure × volume). This was validated on real data: after isolating clean fills, `k` comes out essentially flat across the operating band, confirming the 1/P² form.
+
+### How `k` is fit (and kept fresh)
+
+`k` is fit from your own history, but only from **clean, fast refills** — a *slow* pressure rise means someone was drawing water while the pump ran, which corrupts the calibration, so those samples are dropped. The median of `flow · P_abs² / (dP/dt)` over the clean samples gives `k`.
+
+- **Build it once:** **Developer tools → Actions → *imbrr: Build outflow model*** (optional `days`, default 30).
+- **Kept fresh automatically:** the integration re-fits a fresh 30-day model **weekly**, and updates a **daily-`k` tracker** every day so you can watch it drift. The **Outflow model k (daily fit)** sensor records that daily value (backfilled ~30 days), and the example dashboard plots it as a scatter with a 7-day average line.
+
+### Using it
+
+The **Outflow rate (estimated)** sensor estimates flow out of the tank in real time. It needs the device's **MQTT pressure stream** for enough resolution, and reads *unknown* until a model exists and pressure is updating. It's a **rough proxy** (roughly ±2–4 gpm), so the numeric value is best for a glance; the sensor's `draw_level` attribute (none/low/moderate/high) is the more trustworthy signal for automations.
 
 ## Example dashboard
 

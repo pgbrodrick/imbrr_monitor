@@ -245,6 +245,48 @@ views:
               xaxis: { gridcolor: "rgba(255,255,255,0.08)" }
               yaxis: { title: Volume, gridcolor: "rgba(255,255,255,0.08)" }
 
+          # Outflow-model coefficient k: each day's fit as a scatter point, with
+          # a 7-day moving average line. Pan the x-axis to examine earlier days.
+          # (Backfilled ~30 days by the integration; a fresh point lands daily.)
+          - type: custom:plotly-graph
+            title: Outflow model k — daily fit & 7-day average
+            hours_to_show: 720
+            refresh_interval: 3600
+            entities:
+              - entity: sensor.well_outflow_k
+                name: Daily fit
+                statistic: mean
+                period: day
+                mode: markers
+                marker: { size: 6, color: "rgba(78,115,223,0.85)" }
+              - entity: sensor.well_outflow_k
+                name: 7-day average
+                statistic: mean
+                period: day
+                line: { color: "#1cc88a", width: 2 }
+                filters:
+                  - fn: |
+                      ({ xs, ys }) => {
+                        const w = 7;
+                        const out = [];
+                        for (let i = 0; i < ys.length; i++) {
+                          const s = ys
+                            .slice(Math.max(0, i - w + 1), i + 1)
+                            .filter((v) => v != null);
+                          out.push(s.length ? s.reduce((a, b) => a + b, 0) / s.length : null);
+                        }
+                        return { xs, ys: out };
+                      }
+            layout:
+              paper_bgcolor: "rgba(0,0,0,0)"
+              plot_bgcolor: "rgba(0,0,0,0)"
+              font:
+                color: "#e1e1e1"
+              margin: { t: 30, l: 60, r: 20, b: 40 }
+              legend: { orientation: h, y: 1.15 }
+              xaxis: { gridcolor: "rgba(255,255,255,0.08)" }
+              yaxis: { title: k, gridcolor: "rgba(255,255,255,0.08)" }
+
       # ------------------------------------------------------ Pump cycles & totals
       - type: grid
         cards:
@@ -277,6 +319,12 @@ views:
                 icon: mdi:water-plus
               - entity: sensor.well_water_temperature
                 icon: mdi:thermometer-water
+              - entity: sensor.well_outflow_rate
+                name: Outflow (estimated)
+                icon: mdi:water-minus
+              - entity: sensor.well_outflow_k
+                name: Outflow model k
+                icon: mdi:tune-variant
               - entity: sensor.well_last_reading
                 name: Last reading
                 icon: mdi:clock-outline

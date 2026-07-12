@@ -196,10 +196,11 @@ async def test_first_setup_seeds_backfill_window(
 
     assert await setup_entry(hass, mock_config_entry)
 
-    call = mock_api.async_get_readings_since_date.await_args
-    start = call.args[1]
+    # Outflow maintenance also calls the readings endpoint, so check the call
+    # list for the history-backfill window rather than the last call.
     expected = (dt_util.utcnow() - timedelta(days=DEFAULT_BACKFILL_DAYS)).date()
-    assert abs((start - expected).days) <= 1
+    starts = [c.args[1] for c in mock_api.async_get_readings_since_date.await_args_list]
+    assert any(abs((s - expected).days) <= 1 for s in starts)
 
     coordinator = mock_config_entry.runtime_data
     assert coordinator.ledgers[TEST_SERIAL].backfill_done is True
@@ -215,9 +216,9 @@ async def test_backfill_respects_options(hass, mock_config_entry, mock_api) -> N
 
     assert await setup_entry(hass, mock_config_entry)
 
-    start = mock_api.async_get_readings_since_date.await_args.args[1]
     expected = (dt_util.utcnow() - timedelta(days=7)).date()
-    assert abs((start - expected).days) <= 1
+    starts = [c.args[1] for c in mock_api.async_get_readings_since_date.await_args_list]
+    assert any(abs((s - expected).days) <= 1 for s in starts)
 
 
 async def test_backfill_not_double_counted_after_reload(

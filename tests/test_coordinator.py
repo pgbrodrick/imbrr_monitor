@@ -328,6 +328,30 @@ async def test_build_outflow_model_insufficient_data(hass, mock_config_entry) ->
     assert summary[TEST_SERIAL]["fitted"] is False
 
 
+async def test_outflow_maintenance_promotes_weekly_tracks_daily(
+    hass, mock_config_entry
+) -> None:
+    api = make_mock_api()
+    rows = _refill_readings(1, 30) + _refill_readings(2, 30) + _refill_readings(3, 30)
+    api.async_get_readings_since_date.return_value = (rows, False)
+    coordinator = await make_coordinator(hass, mock_config_entry, api)
+    ledger = coordinator.ledgers[TEST_SERIAL]
+
+    # First run: no model yet -> builds it, and tracks the daily k.
+    await coordinator.async_outflow_maintenance()
+    assert ledger.outflow_model is not None
+    assert ledger.daily_k is not None
+    assert coordinator._device_data[TEST_SERIAL].outflow_k == ledger.daily_k
+    first_refit = ledger.last_model_refit
+    assert first_refit is not None
+
+    # Second run within the week: model NOT re-promoted; daily k still refreshed.
+    ledger.daily_k = None
+    await coordinator.async_outflow_maintenance()
+    assert ledger.last_model_refit == first_refit
+    assert ledger.daily_k is not None
+
+
 async def test_get_outflow(hass, mock_config_entry) -> None:
     api = make_mock_api()
     api.async_get_latest_depth.return_value = make_latest_depth(
