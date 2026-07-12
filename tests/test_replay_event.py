@@ -2,8 +2,10 @@
 
 The fixture is a genuine event's (dt, psi, flow) rows at the device's ~5 s
 cadence, replayed as the MQTT state blob would deliver them — with
-``flow_event_status`` lying as "completed" throughout, which is what the
-device's firmware has been observed to do mid-event. This is the regression
+``flow_event_status`` deliberately forced to "completed" throughout. (The
+real device reports "active" mid-event; forcing a terminal status here
+proves detection survives even if the firmware's vocabulary drifts again,
+via the metered-flow and rising-pressure signals.) This is the regression
 test for the dead flow_rate/flow_active bug and for the pump-on outflow
 estimate.
 """
@@ -51,7 +53,8 @@ async def test_replay_real_pump_event(hass, mock_config_entry, freezer) -> None:
             {
                 "pressure_psi": psi,
                 "flow_gpm": flow,
-                "flow_event_status": "completed",  # the status field lies
+                # Worst case: a terminal status all the way through.
+                "flow_event_status": "completed",
             }
         )
         with patch.object(coordinator, "async_request_refresh"):
@@ -75,13 +78,13 @@ async def test_replay_real_pump_event(hass, mock_config_entry, freezer) -> None:
         out is not None and abs(out - expected_draw) < 0.15 for _, _, out in settled
     ), "pump-off draw must be visible and match C(P)*dP/dt"
 
-    # --- the real event, blob status lying the whole way ----------------
+    # --- the real event, terminal status forced the whole way -----------
     during = []
     for r in EVENT:
         during.append((r["dt"], *feed(r["dt"], r["psi"], r["flow"])))
     body = [row for row in during if 15 < row[0] < 130]
     assert all(active for _, active, _, _ in body), (
-        "event must read active despite the lying status field"
+        "event must read active despite the terminal status field"
     )
     assert all(flow > 4 for _, _, flow, _ in body), (
         "flow_rate must show the metered inflow"

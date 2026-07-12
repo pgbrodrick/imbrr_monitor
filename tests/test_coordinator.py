@@ -424,7 +424,7 @@ async def test_get_outflow_during_pump_on_with_draw(hass, mock_config_entry) -> 
     """
     coordinator = await _outflow_coordinator(hass, mock_config_entry)
     model = coordinator.ledgers[TEST_SERIAL].outflow_model
-    # Pump on: metered inflow 6 gpm (status field lies, as observed live).
+    # Pump on: metered inflow 6 gpm (terminal status forced, for robustness).
     coordinator.handle_mqtt_message(
         f"imbrr/{TEST_SERIAL}/state",
         '{"pressure_psi":55.0,"flow_gpm":6.0,"flow_event_status":"completed"}',
@@ -491,13 +491,19 @@ STATE_PAYLOAD_IDLE = (
     '{"depth_ft":91.56,"temp_f":61.03,"pressure_psi":48.32,'
     '"flow_gpm":0.00,"event_gallons":0.000,"flow_event_status":"completed"}'
 )
+# Mid-event the device reports status "active" (not the API's "in_progress").
 STATE_PAYLOAD_FLOWING = (
     '{"depth_ft":120.4,"temp_f":57.6,"pressure_psi":45.1,'
-    '"flow_gpm":5.20,"event_gallons":3.140,"flow_event_status":"in_progress"}'
+    '"flow_gpm":5.20,"event_gallons":3.140,"flow_event_status":"active"}'
 )
-# The blob's flow_event_status is unreliable mid-event: it keeps reporting
-# the previous event's "completed" while the pump is actually running. The
-# metered flow_gpm is the trustworthy field.
+# The first blob of a captured live event: the status flips to "active"
+# several seconds before flow_gpm goes non-zero — the fastest start signal.
+STATE_PAYLOAD_STARTING = (
+    '{"depth_ft":122.06,"temp_f":57.6,"pressure_psi":43.83,'
+    '"flow_gpm":0.0,"event_gallons":0.0,"flow_event_status":"active"}'
+)
+# Robustness: even if the status field reports a terminal state while the
+# pump runs (firmware vocabulary drift), the metered flow_gpm must win.
 STATE_PAYLOAD_STALE_STATUS = (
     '{"depth_ft":94.9,"temp_f":66.6,"pressure_psi":57.4,'
     '"flow_gpm":6.35,"event_gallons":0.000,"flow_event_status":"completed"}'
@@ -550,10 +556,33 @@ async def test_mqtt_json_state_sets_flow_active_and_refreshes(
     assert api.async_get_latest_depth.await_count >= 1
 
 
+async def test_mqtt_active_status_detected_before_flow(
+    hass, mock_config_entry
+) -> None:
+    """The device's "active" status alone marks the event started.
+
+    Captured live: the blob's flow_event_status flips to "active" (the
+    device's vocabulary, not the API's "in_progress") several seconds before
+    flow_gpm goes non-zero. That status must be recognized on its own.
+    """
+    api = make_mock_api()
+    api.async_get_latest_depth.return_value = make_latest_depth(
+        reading_id=0, status="completed"
+    )
+    coordinator = await make_coordinator(hass, mock_config_entry, api)
+    coordinator.async_set_updated_data(await coordinator._async_update_data())
+    assert coordinator.is_flow_active(TEST_SERIAL) is False
+
+    coordinator.handle_mqtt_message(STATE_TOPIC, STATE_PAYLOAD_STARTING)
+    await hass.async_block_till_done()
+
+    assert coordinator.is_flow_active(TEST_SERIAL) is True
+
+
 async def test_metered_flow_beats_stale_completed_status(
     hass, mock_config_entry
 ) -> None:
-    """A real metered flow means active even when the status field lies.
+    """A real metered flow means active even under a terminal status.
 
     Regression (the dead flow_rate/flow_active bug): the blob streams every
     ~5 s so it is always fresh, and its flow_event_status keeps saying

@@ -54,6 +54,7 @@ from .const import (
     DEFAULT_FAST_SCAN_INTERVAL,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    FLOW_ACTIVE_STATUSES,
     MQTT_FRESHNESS_FACTOR,
     MQTT_STATE_JSON_MAP,
     MQTT_STATE_STATUS_FIELD,
@@ -620,14 +621,14 @@ class ImbrrCoordinator(DataUpdateCoordinator[dict[str, ImbrrDeviceData]]):
         """Whether the well is pumping, combining several signals.
 
         The device's MQTT state blob streams every ~5 s, so it is always
-        "fresh" — but its flow_event_status field keeps reporting the
-        previous event's terminal state while the pump runs, so it must
-        never veto the other signals on its own. Activity is therefore:
-        a fresh MQTT flow above threshold, an explicit in_progress status,
-        or tank pressure rising (only the pump raises tank pressure). A
-        coherent set of fresh idle readings (status completed AND flow ~0)
-        ends the event immediately instead of waiting out the next poll;
-        without MQTT, the polled API status decides.
+        "fresh" and effectively decides — but its firmware reports "active"
+        where the cloud API says "in_progress" (captured live), so the
+        status is matched against both vocabularies, and is backed up by
+        two signals that don't depend on it at all: a fresh MQTT flow above
+        threshold, and tank pressure rising (only the pump raises tank
+        pressure). A coherent set of fresh idle readings (terminal status
+        AND flow ~0) ends the event immediately instead of waiting out the
+        next poll; without MQTT, the polled API status decides.
         """
         now = dt_util.utcnow()
         status: str | None = None
@@ -636,7 +637,7 @@ class ImbrrCoordinator(DataUpdateCoordinator[dict[str, ImbrrDeviceData]]):
             max_age = self._base_interval * MQTT_FRESHNESS_FACTOR
             if (now - received).total_seconds() <= max_age:
                 status = candidate
-        if status == "in_progress":
+        if status in FLOW_ACTIVE_STATUSES:
             return True
 
         flow = self._fresh_mqtt(data, "flow")
