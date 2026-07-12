@@ -19,10 +19,10 @@ HOUR_2 = datetime(2026, 7, 1, 11, 0, tzinfo=timezone.utc)
 
 # unique_id suffix -> (entity_id, unit) registered for the device.
 ENTITY_SUFFIXES = {
-    "depth_to_water": ("sensor.well_depth_to_water", "ft"),
-    "flow_rate": ("sensor.well_flow_rate", "gal/min"),
-    "pressure": ("sensor.well_pressure", "psi"),
-    "water_temperature": ("sensor.well_water_temperature", "°F"),
+    "depth_to_water": ("sensor.imbrr_depth_to_water", "ft"),
+    "flow_rate": ("sensor.imbrr_flow_rate", "gal/min"),
+    "pressure": ("sensor.imbrr_pressure", "psi"),
+    "water_temperature": ("sensor.imbrr_water_temperature", "°F"),
 }
 
 
@@ -79,7 +79,7 @@ async def test_imports_onto_entity_statistic_ids(registered_entities, hass) -> N
     # One import per measurement entity, keyed by the entity id (not imbrr:*).
     assert set(by_id) == set(registered_entities.values())
 
-    flow = by_id["sensor.well_flow_rate"]
+    flow = by_id["sensor.imbrr_flow_rate"]
     assert flow.args[1]["source"] == "recorder"
     assert flow.args[1]["unit_of_measurement"] == "gal/min"
     stats = flow.args[2]

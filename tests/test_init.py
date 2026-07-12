@@ -174,11 +174,11 @@ async def test_setup_and_unload(hass, mock_config_entry, mock_api) -> None:
 
     # Entities exist for the well device. The test hass runs metric, so the
     # 136.416 ft depth is auto-converted to meters by the distance class.
-    state = hass.states.get("sensor.test_well_site_depth_to_water")
+    state = hass.states.get("sensor.imbrr_depth_to_water")
     assert state is not None
     assert float(state.state) == pytest.approx(136.416 * 0.3048, rel=1e-3)
-    assert hass.states.get("binary_sensor.test_well_site_flow_active").state == "off"
-    assert hass.states.get("sensor.test_well_site_total_water") is not None
+    assert hass.states.get("binary_sensor.imbrr_flow_active").state == "off"
+    assert hass.states.get("sensor.imbrr_total_water") is not None
 
     assert await hass.config_entries.async_unload(mock_config_entry.entry_id)
     assert mock_config_entry.state is ConfigEntryState.NOT_LOADED

@@ -35,7 +35,7 @@ class ImbrrFlowActiveBinarySensor(ImbrrBaseEntity, BinarySensorEntity):
 
     def __init__(self, coordinator: ImbrrCoordinator, serial: str) -> None:
         super().__init__(coordinator, serial)
-        self._attr_unique_id = f"{serial}_flow_active"
+        self._assign_ids("binary_sensor", "flow_active")
 
     @property
     def is_on(self) -> bool:

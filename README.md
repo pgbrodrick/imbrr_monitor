@@ -111,7 +111,7 @@ A ready-made two-view dashboard is in [`examples/well-dashboard.yaml`](examples/
 - **Well** — live status glance with icons, gauges, a "pump running" banner, and short-term (48 h) Plotly trends: coupled water depth (axis reversed so the surface is at the top) + flow, pressure over time, and a daily cumulative-water curve.
 - **Long-term** — daily / weekly / monthly aggregates (average depth, water use, average pump rate, and pump-cycle counts) using the built-in Statistics Graph card.
 
-Both views use the [Plotly Graph Card](https://github.com/dbuezas/lovelace-plotly-graph-card) (HACS → Frontend); View 2 also uses the built-in Statistics Graph card. The pump-cycle-count graphs need a small helper documented in the file. Paste the `views:` block into a dashboard's YAML editor and find/replace the `well_` entity prefix with your device's.
+Both views use the [Plotly Graph Card](https://github.com/dbuezas/lovelace-plotly-graph-card) (HACS → Frontend); View 2 also uses the built-in Statistics Graph card. The pump-cycle-count graphs need a small helper documented in the file. Paste the `views:` block into a dashboard's YAML editor — imbrr entity ids are fixed (`sensor.imbrr_depth_to_water`, `sensor.imbrr_outflow_rate`, …), so it works as-is with no find/replace. (With more than one imbrr device, the second device's shared metrics get an `_2` suffix.)
 
 ## Options
 

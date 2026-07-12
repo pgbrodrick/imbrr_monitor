@@ -323,6 +323,17 @@ class ImbrrBaseEntity(CoordinatorEntity[ImbrrCoordinator]):
         self._serial = serial
         self._attr_device_info = build_device_info(self.device_data)
 
+    def _assign_ids(self, platform: str, key: str) -> None:
+        """Set a stable unique_id and a key-based ``imbrr_`` entity_id.
+
+        The entity_id is derived from the immutable metric key rather than the
+        display name, so renaming a sensor never changes its id and the
+        example dashboard's ``<platform>.imbrr_<key>`` references stay valid.
+        (With multiple devices, HA appends ``_2`` to any shared key.)
+        """
+        self._attr_unique_id = f"{self._serial}_{key}"
+        self.entity_id = f"{platform}.imbrr_{key}"
+
     @property
     def device_data(self) -> ImbrrDeviceData:
         return self.coordinator.data[self._serial]
@@ -345,7 +356,7 @@ class ImbrrSensor(ImbrrBaseEntity, SensorEntity):
     ) -> None:
         super().__init__(coordinator, serial)
         self.entity_description = description
-        self._attr_unique_id = f"{serial}_{description.key}"
+        self._assign_ids("sensor", description.key)
 
     @property
     def native_value(self) -> Any:
@@ -373,7 +384,7 @@ class ImbrrLifetimeWaterSensor(ImbrrBaseEntity, RestoreEntity, SensorEntity):
 
     def __init__(self, coordinator: ImbrrCoordinator, serial: str) -> None:
         super().__init__(coordinator, serial)
-        self._attr_unique_id = f"{serial}_total_water"
+        self._assign_ids("sensor", "total_water")
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
@@ -420,7 +431,7 @@ class ImbrrOutflowSensor(ImbrrBaseEntity, SensorEntity):
 
     def __init__(self, coordinator: ImbrrCoordinator, serial: str) -> None:
         super().__init__(coordinator, serial)
-        self._attr_unique_id = f"{serial}_outflow_rate"
+        self._assign_ids("sensor", "outflow_rate")
 
     @property
     def native_value(self) -> float | None:

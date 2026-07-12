@@ -13,10 +13,11 @@
 #   The one optional helper (for pump-cycle counts) is documented above View 2.
 #
 # ENTITY NAMES
-#   This assumes your imbrr device is named "Well", giving entity ids like
-#   sensor.well_depth_to_water. If your device has a different name, do a
-#   find/replace of "well_" with your prefix (open any imbrr entity →
-#   settings to see its entity_id).
+#   imbrr entity ids are fixed and independent of the device's display name:
+#   sensor.imbrr_depth_to_water, sensor.imbrr_outflow_rate, etc. — so this
+#   dashboard works as-is, no find/replace needed. (Only if you have more than
+#   one imbrr device do the second device's shared metrics get an "_2" suffix;
+#   open any imbrr entity → settings to see its exact entity_id.)
 #
 # UNITS
 #   Gauge ranges/severity below assume the device's native US units
@@ -47,15 +48,15 @@ views:
           # Live "is it pumping right now" banner (MQTT-driven, near-instant).
           - type: conditional
             conditions:
-              - entity: binary_sensor.well_flow_active
+              - entity: binary_sensor.imbrr_flow_active
                 state: "on"
             card:
               type: markdown
               content: >
-                ## 💧 Pump running — {{ states('sensor.well_flow_rate') }}
-                {{ state_attr('sensor.well_flow_rate','unit_of_measurement') }}
-                &nbsp;·&nbsp; {{ states('sensor.well_current_event_water') }}
-                {{ state_attr('sensor.well_current_event_water','unit_of_measurement') }}
+                ## 💧 Pump running — {{ states('sensor.imbrr_flow_rate') }}
+                {{ state_attr('sensor.imbrr_flow_rate','unit_of_measurement') }}
+                &nbsp;·&nbsp; {{ states('sensor.imbrr_current_event_gallons') }}
+                {{ state_attr('sensor.imbrr_current_event_gallons','unit_of_measurement') }}
                 this event
 
           # At-a-glance status with explicit icons.
@@ -65,27 +66,27 @@ views:
             state_color: true
             show_state: true
             entities:
-              - entity: binary_sensor.well_flow_active
+              - entity: binary_sensor.imbrr_flow_active
                 name: Pumping
                 icon: mdi:water-pump
-              - entity: sensor.well_pressure
+              - entity: sensor.imbrr_pressure
                 name: Pressure
                 icon: mdi:gauge
-              - entity: sensor.well_flow_rate
+              - entity: sensor.imbrr_flow_rate
                 name: Flow
                 icon: mdi:water
-              - entity: sensor.well_depth_to_water
+              - entity: sensor.imbrr_depth_to_water
                 name: Depth
                 icon: mdi:arrow-down-bold-circle
-              - entity: sensor.well_water_temperature
+              - entity: sensor.imbrr_water_temperature
                 name: Temp
                 icon: mdi:thermometer-water
-              - entity: sensor.well_current_event_water
+              - entity: sensor.imbrr_current_event_gallons
                 name: This event
                 icon: mdi:cup-water
               # Estimated flow OUT of the pressure tank (household draw).
               # Reads unknown until you run the imbrr.build_outflow_model action.
-              - entity: sensor.well_outflow_rate
+              - entity: sensor.imbrr_outflow_rate
                 name: Out (est)
                 icon: mdi:water-minus
 
@@ -93,7 +94,7 @@ views:
           - type: horizontal-stack
             cards:
               - type: gauge
-                entity: sensor.well_depth_to_water
+                entity: sensor.imbrr_depth_to_water
                 name: Depth to water
                 needle: true
                 min: 0
@@ -103,7 +104,7 @@ views:
                   yellow: 120
                   red: 150
               - type: gauge
-                entity: sensor.well_pressure
+                entity: sensor.imbrr_pressure
                 name: Pressure
                 needle: true
                 min: 0
@@ -113,13 +114,13 @@ views:
                   green: 40
                   yellow: 70
               - type: gauge
-                entity: sensor.well_flow_rate
+                entity: sensor.imbrr_flow_rate
                 name: Flow rate
                 needle: true
                 min: 0
                 max: 10
               - type: gauge
-                entity: sensor.well_outflow_rate
+                entity: sensor.imbrr_outflow_rate
                 name: Outflow (est)
                 needle: true
                 min: 0
@@ -139,7 +140,7 @@ views:
             hours_to_show: 48
             refresh_interval: 60
             entities:
-              - entity: sensor.well_depth_to_water
+              - entity: sensor.imbrr_depth_to_water
                 name: Depth to water
                 statistic: mean
                 period: 5minute
@@ -147,7 +148,7 @@ views:
                 line:
                   color: "#4e73df"
                   width: 2
-              - entity: sensor.well_flow_rate
+              - entity: sensor.imbrr_flow_rate
                 name: Peak flow
                 statistic: max
                 period: 5minute
@@ -183,7 +184,7 @@ views:
             hours_to_show: 48
             refresh_interval: 60
             entities:
-              - entity: sensor.well_pressure
+              - entity: sensor.imbrr_pressure
                 name: Pressure
                 statistic: mean
                 period: 5minute
@@ -212,7 +213,7 @@ views:
             hours_to_show: 48
             refresh_interval: 300
             entities:
-              - entity: sensor.well_flow_rate
+              - entity: sensor.imbrr_flow_rate
                 name: Cumulative water
                 fill: tozeroy
                 fillcolor: "rgba(54,185,204,0.2)"
@@ -253,13 +254,13 @@ views:
             hours_to_show: 720
             refresh_interval: 3600
             entities:
-              - entity: sensor.well_outflow_k
+              - entity: sensor.imbrr_outflow_k
                 name: Daily fit
                 statistic: mean
                 period: day
                 mode: markers
                 marker: { size: 6, color: "rgba(78,115,223,0.85)" }
-              - entity: sensor.well_outflow_k
+              - entity: sensor.imbrr_outflow_k
                 name: 7-day average
                 statistic: mean
                 period: day
@@ -298,37 +299,37 @@ views:
           - type: entities
             title: Last pump cycle
             entities:
-              - entity: sensor.well_last_pump_cycle_rate
+              - entity: sensor.imbrr_last_pump_cycle_gpm
                 icon: mdi:speedometer
-              - entity: sensor.well_last_pump_cycle_water
+              - entity: sensor.imbrr_last_pump_cycle_gallons
                 icon: mdi:water
-              - entity: sensor.well_last_pump_cycle_duration
+              - entity: sensor.imbrr_last_pump_cycle_duration
                 icon: mdi:timer-outline
-              - entity: sensor.well_last_pump_cycle_start_pressure
+              - entity: sensor.imbrr_last_pump_cycle_start_psi
                 icon: mdi:gauge-low
-              - entity: sensor.well_last_pump_cycle_stop_pressure
+              - entity: sensor.imbrr_last_pump_cycle_stop_psi
                 icon: mdi:gauge-full
 
           - type: entities
             title: Totals & details
             entities:
-              - entity: sensor.well_total_water
+              - entity: sensor.imbrr_total_water
                 name: Total water (lifetime)
                 icon: mdi:cup-water
-              - entity: sensor.well_current_event_water
+              - entity: sensor.imbrr_current_event_gallons
                 icon: mdi:water-plus
-              - entity: sensor.well_water_temperature
+              - entity: sensor.imbrr_water_temperature
                 icon: mdi:thermometer-water
-              - entity: sensor.well_outflow_rate
+              - entity: sensor.imbrr_outflow_rate
                 name: Outflow (estimated)
                 icon: mdi:water-minus
-              - entity: sensor.well_outflow_k
+              - entity: sensor.imbrr_outflow_k
                 name: Outflow model k
                 icon: mdi:tune-variant
-              - entity: sensor.well_last_reading
+              - entity: sensor.imbrr_last_reading
                 name: Last reading
                 icon: mdi:clock-outline
-              - entity: binary_sensor.well_flow_active
+              - entity: binary_sensor.imbrr_flow_active
                 name: Flow active
                 icon: mdi:water-pump
 
@@ -366,20 +367,20 @@ views:
             hours_to_show: 720
             refresh_interval: 3600
             entities:
-              - entity: sensor.well_depth_to_water
+              - entity: sensor.imbrr_depth_to_water
                 name: Max
                 statistic: max
                 period: day
                 showlegend: false
                 line: { width: 0, shape: hv }
-              - entity: sensor.well_depth_to_water
+              - entity: sensor.imbrr_depth_to_water
                 name: Daily range
                 statistic: min
                 period: day
                 fill: tonexty
                 fillcolor: "rgba(78,115,223,0.18)"
                 line: { width: 0, shape: hv }
-              - entity: sensor.well_depth_to_water
+              - entity: sensor.imbrr_depth_to_water
                 name: Average
                 statistic: mean
                 period: day
@@ -403,7 +404,7 @@ views:
             stat_types:
               - change
             entities:
-              - sensor.well_total_water
+              - sensor.imbrr_total_water
           - type: statistics-graph
             title: Daily average pump rate
             chart_type: bar
@@ -412,7 +413,7 @@ views:
             stat_types:
               - mean
             entities:
-              - sensor.well_last_pump_cycle_rate
+              - sensor.imbrr_last_pump_cycle_gpm
           - type: statistics-graph
             title: Daily pump cycles
             chart_type: bar
@@ -421,7 +422,7 @@ views:
             stat_types:
               - change
             entities:
-              - sensor.well_pump_cycles
+              - sensor.imbrr_pump_cycles
 
       - type: grid
         cards:
@@ -434,20 +435,20 @@ views:
             hours_to_show: 4320
             refresh_interval: 3600
             entities:
-              - entity: sensor.well_depth_to_water
+              - entity: sensor.imbrr_depth_to_water
                 name: Max
                 statistic: max
                 period: week
                 showlegend: false
                 line: { width: 0, shape: hv }
-              - entity: sensor.well_depth_to_water
+              - entity: sensor.imbrr_depth_to_water
                 name: Weekly range
                 statistic: min
                 period: week
                 fill: tonexty
                 fillcolor: "rgba(78,115,223,0.18)"
                 line: { width: 0, shape: hv }
-              - entity: sensor.well_depth_to_water
+              - entity: sensor.imbrr_depth_to_water
                 name: Average
                 statistic: mean
                 period: week
@@ -471,7 +472,7 @@ views:
             stat_types:
               - change
             entities:
-              - sensor.well_total_water
+              - sensor.imbrr_total_water
           - type: statistics-graph
             title: Weekly average pump rate
             chart_type: bar
@@ -480,7 +481,7 @@ views:
             stat_types:
               - mean
             entities:
-              - sensor.well_last_pump_cycle_rate
+              - sensor.imbrr_last_pump_cycle_gpm
           - type: statistics-graph
             title: Weekly pump cycles
             chart_type: bar
@@ -489,7 +490,7 @@ views:
             stat_types:
               - change
             entities:
-              - sensor.well_pump_cycles
+              - sensor.imbrr_pump_cycles
 
       - type: grid
         cards:
@@ -502,20 +503,20 @@ views:
             hours_to_show: 8760
             refresh_interval: 3600
             entities:
-              - entity: sensor.well_depth_to_water
+              - entity: sensor.imbrr_depth_to_water
                 name: Max
                 statistic: max
                 period: month
                 showlegend: false
                 line: { width: 0, shape: hv }
-              - entity: sensor.well_depth_to_water
+              - entity: sensor.imbrr_depth_to_water
                 name: Monthly range
                 statistic: min
                 period: month
                 fill: tonexty
                 fillcolor: "rgba(78,115,223,0.18)"
                 line: { width: 0, shape: hv }
-              - entity: sensor.well_depth_to_water
+              - entity: sensor.imbrr_depth_to_water
                 name: Average
                 statistic: mean
                 period: month
@@ -539,7 +540,7 @@ views:
             stat_types:
               - change
             entities:
-              - sensor.well_total_water
+              - sensor.imbrr_total_water
           - type: statistics-graph
             title: Monthly average pump rate
             chart_type: bar
@@ -548,7 +549,7 @@ views:
             stat_types:
               - mean
             entities:
-              - sensor.well_last_pump_cycle_rate
+              - sensor.imbrr_last_pump_cycle_gpm
           - type: statistics-graph
             title: Monthly pump cycles
             chart_type: bar
@@ -557,4 +558,4 @@ views:
             stat_types:
               - change
             entities:
-              - sensor.well_pump_cycles
+              - sensor.imbrr_pump_cycles
