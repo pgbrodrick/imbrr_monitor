@@ -79,6 +79,34 @@ async def test_setup_tolerates_legacy_numeric_id(hass, mock_api) -> None:
     assert [d.serial for d in coordinator.devices] == [TEST_SERIAL]
 
 
+async def test_build_outflow_model_service(hass, mock_config_entry, mock_api) -> None:
+    """The build_outflow_model action fits and stores a model, and the sensor exists."""
+    rows = []
+    for uid in (1, 2, 3):
+        psi = 45.0
+        t = NOW
+        for i in range(30):
+            rows.append(make_reading(uid * 1000 + i, t, flow=6.0, psi=psi, unique_id=uid))
+            psi += 0.25
+            t += timedelta(seconds=5)
+    mock_api.async_get_readings_since_date.return_value = (rows, False)
+    mock_api.async_get_latest_depth.return_value = make_latest_depth(reading_id=0)
+
+    assert await setup_entry(hass, mock_config_entry)
+    assert hass.services.has_service(DOMAIN, "build_outflow_model")
+    assert [e for e in hass.states.async_entity_ids("sensor") if "outflow" in e]
+
+    result = await hass.services.async_call(
+        DOMAIN,
+        "build_outflow_model",
+        {"days": 20},
+        blocking=True,
+        return_response=True,
+    )
+    assert result["devices"][TEST_SERIAL]["fitted"] is True
+    assert mock_config_entry.runtime_data.ledgers[TEST_SERIAL].outflow_model is not None
+
+
 async def test_migration_strips_legacy_numeric_id(hass, mock_api) -> None:
     """A v1.1 entry is migrated to v1.2, dropping numeric_id from storage."""
     entry = MockConfigEntry(

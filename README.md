@@ -66,6 +66,15 @@ The Depth to water, Flow rate, Pressure, and Water temperature sensors get **hou
 
 **Settings → Dashboards → Energy → Water consumption**: add the **Total water** sensor as a water source (it's a `device_class: water`, total-increasing sensor).
 
+## Estimated tank outflow (household draw)
+
+The imbrr meter measures flow *into* your pressure tank; it can't see water you draw *out* — especially when the pump is off, when it reads 0. The optional **Outflow rate (estimated)** sensor infers your household draw from how fast tank pressure changes, using a one-time model fit from your own history.
+
+1. Run **Developer tools → Actions → *imbrr: Build outflow model*** (optionally set `days`, default 30). It fits a pressure-tank model from your readings and returns a summary. Re-run it anytime to refresh the fit.
+2. The **Outflow rate (estimated)** sensor then estimates flow out of the tank in real time. It needs the device's **MQTT pressure stream** for enough resolution, and reads *unknown* until a model exists and pressure is updating.
+
+It's a **rough proxy** (roughly ±2–4 gpm), so the numeric value is best for a glance; the sensor's `draw_level` attribute (none/low/moderate/high) is the more trustworthy signal for automations. It's most useful for seeing draw while the pump is off, which is otherwise invisible.
+
 ## Example dashboard
 
 A ready-made two-view dashboard is in [`examples/well-dashboard.yaml`](examples/well-dashboard.yaml):

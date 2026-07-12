@@ -9,7 +9,12 @@ import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD, Platform
-from homeassistant.core import HomeAssistant, ServiceCall, callback
+from homeassistant.core import (
+    HomeAssistant,
+    ServiceCall,
+    SupportsResponse,
+    callback,
+)
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import aiohttp_client
 from homeassistant.util import dt as dt_util
@@ -33,10 +38,14 @@ _LOGGER = logging.getLogger(__name__)
 PLATFORMS = [Platform.BINARY_SENSOR, Platform.SENSOR]
 
 SERVICE_IMPORT_HISTORY = "import_history"
+SERVICE_BUILD_OUTFLOW_MODEL = "build_outflow_model"
 ATTR_DAYS = "days"
-IMPORT_HISTORY_SCHEMA = vol.Schema(
+_DAYS_SCHEMA = vol.Schema(
     {vol.Optional(ATTR_DAYS): vol.All(vol.Coerce(int), vol.Range(min=1, max=365))}
 )
+IMPORT_HISTORY_SCHEMA = _DAYS_SCHEMA
+BUILD_OUTFLOW_MODEL_SCHEMA = _DAYS_SCHEMA
+DEFAULT_OUTFLOW_MODEL_DAYS = 30
 
 type ImbrrConfigEntry = ConfigEntry[ImbrrCoordinator]
 
@@ -148,6 +157,24 @@ def _async_register_services(hass: HomeAssistant) -> None:
         schema=IMPORT_HISTORY_SCHEMA,
     )
 
+    async def _handle_build_outflow_model(call: ServiceCall) -> dict:
+        days = call.data.get(ATTR_DAYS, DEFAULT_OUTFLOW_MODEL_DAYS)
+        result: dict = {}
+        for entry in hass.config_entries.async_entries(DOMAIN):
+            if entry.state is not ConfigEntryState.LOADED:
+                continue
+            coordinator: ImbrrCoordinator = entry.runtime_data
+            result.update(await coordinator.async_build_outflow_model(days))
+        return {"devices": result}
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_BUILD_OUTFLOW_MODEL,
+        _handle_build_outflow_model,
+        schema=BUILD_OUTFLOW_MODEL_SCHEMA,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+
 
 async def _async_setup_mqtt(
     hass: HomeAssistant, entry: ImbrrConfigEntry, coordinator: ImbrrCoordinator
@@ -194,6 +221,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ImbrrConfigEntry) -> bo
             if other.entry_id != entry.entry_id
             and other.state is ConfigEntryState.LOADED
         ]
-        if not remaining and hass.services.has_service(DOMAIN, SERVICE_IMPORT_HISTORY):
-            hass.services.async_remove(DOMAIN, SERVICE_IMPORT_HISTORY)
+        if not remaining:
+            for service in (SERVICE_IMPORT_HISTORY, SERVICE_BUILD_OUTFLOW_MODEL):
+                if hass.services.has_service(DOMAIN, service):
+                    hass.services.async_remove(DOMAIN, service)
     return unload_ok

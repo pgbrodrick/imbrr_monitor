@@ -83,6 +83,11 @@ views:
               - entity: sensor.well_current_event_water
                 name: This event
                 icon: mdi:cup-water
+              # Estimated flow OUT of the pressure tank (household draw).
+              # Reads unknown until you run the imbrr.build_outflow_model action.
+              - entity: sensor.well_outflow_rate
+                name: Out (est)
+                icon: mdi:water-minus
 
           # Gauges. Ranges assume ft / psi / gpm (see UNITS note above).
           - type: horizontal-stack
@@ -113,6 +118,12 @@ views:
                 needle: true
                 min: 0
                 max: 10
+              - type: gauge
+                entity: sensor.well_outflow_rate
+                name: Outflow (est)
+                needle: true
+                min: 0
+                max: 15
 
       # -------------------------------------------------------- History & trends
       - type: grid

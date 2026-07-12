@@ -61,6 +61,13 @@ from .const import (
     STORAGE_VERSION,
     TYPE_CISTERN,
 )
+from .outflow import (
+    SLOPE_WINDOW_S,
+    OutflowModel,
+    estimate_outflow,
+    fit_outflow_k,
+    pressure_slope,
+)
 from .statistics import async_import_readings
 
 _LOGGER = logging.getLogger(__name__)
@@ -78,6 +85,7 @@ class DeviceLedger:
     backfill_done: bool = False
     pump_cycles_total: int = 0
     last_cycle_ts: datetime | None = None
+    outflow_model: OutflowModel | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -91,6 +99,9 @@ class DeviceLedger:
             "last_cycle_ts": (
                 self.last_cycle_ts.isoformat() if self.last_cycle_ts else None
             ),
+            "outflow_model": (
+                self.outflow_model.as_dict() if self.outflow_model else None
+            ),
         }
 
     @classmethod
@@ -102,6 +113,7 @@ class DeviceLedger:
             backfill_done=bool(data.get("backfill_done", False)),
             pump_cycles_total=int(data.get("pump_cycles_total", 0)),
             last_cycle_ts=_parse_iso(data.get("last_cycle_ts")),
+            outflow_model=OutflowModel.from_dict(data.get("outflow_model")),
         )
 
 
@@ -160,6 +172,9 @@ class ImbrrCoordinator(DataUpdateCoordinator[dict[str, ImbrrDeviceData]]):
             device.serial: ImbrrDeviceData(device=device) for device in devices
         }
         self._pump_cycle_fetched: dict[str, datetime] = {}
+        # Recent (timestamp, psi) samples per device for the outflow proxy's
+        # real-time pressure slope. Fed mostly by the MQTT pressure stream.
+        self._psi_buffer: dict[str, list[tuple[datetime, float]]] = {}
         # History ingestion writes statistics onto the sensor entities, which
         # do not exist during the first refresh. It is enabled once the
         # platforms are set up (see __init__.async_setup_entry).
@@ -304,6 +319,8 @@ class ImbrrCoordinator(DataUpdateCoordinator[dict[str, ImbrrDeviceData]]):
                 "depth_to_water": last.depth_to_water,
             }
         )
+        if last.psi is not None:
+            self._record_psi(device.serial, last.psi)
 
     async def _async_maybe_update_pump_cycles(
         self, device: ImbrrDevice, data: ImbrrDeviceData
@@ -531,6 +548,8 @@ class ImbrrCoordinator(DataUpdateCoordinator[dict[str, ImbrrDeviceData]]):
         now = dt_util.utcnow()
         for reading_key, reading_value in readings.items():
             data.mqtt[reading_key] = (reading_value, now)
+        if "psi" in readings:
+            self._record_psi(serial, readings["psi"], now)
         if status is not None:
             data.mqtt_status = (status, now)
         _LOGGER.debug(
@@ -600,6 +619,87 @@ class ImbrrCoordinator(DataUpdateCoordinator[dict[str, ImbrrDeviceData]]):
             gallons = data.latest.get("accumulated_gallons")
             return float(gallons) if gallons is not None else data.live.get(key)
         return data.live.get(key)
+
+    # ------------------------------------------------------------------
+    # Proxy outflow (flow out of the pressure tank)
+    # ------------------------------------------------------------------
+
+    def _record_psi(
+        self, serial: str, psi: float, now: datetime | None = None
+    ) -> None:
+        """Append a pressure sample and trim to the slope window."""
+        now = now or dt_util.utcnow()
+        buf = self._psi_buffer.setdefault(serial, [])
+        buf.append((now, psi))
+        cutoff = now - timedelta(seconds=SLOPE_WINDOW_S)
+        while buf and buf[0][0] < cutoff:
+            buf.pop(0)
+
+    def get_outflow(self, serial: str) -> float | None:
+        """Estimated flow OUT of the tank (gpm), or None if not computable.
+
+        Needs a fitted model (build via the imbrr.build_outflow_model action),
+        a current pressure, and enough recent pressure samples to estimate the
+        slope — which in practice means the device's MQTT stream is active.
+        """
+        ledger = self.ledgers.get(serial)
+        if ledger is None or ledger.outflow_model is None:
+            return None
+        psi = self.get_live_value(serial, "psi")
+        if psi is None:
+            return None
+        dpdt = pressure_slope(self._psi_buffer.get(serial, []), dt_util.utcnow())
+        if dpdt is None:
+            return None
+        flow_in = self.get_live_value(serial, "flow") or 0.0
+        return estimate_outflow(ledger.outflow_model, psi, flow_in, dpdt)
+
+    async def async_build_outflow_model(self, days: int) -> dict[str, Any]:
+        """Fit the tank model from the last ``days`` of readings, per device.
+
+        Returns a per-device summary of what was fit.
+        """
+        tz = self.api.timezone
+        now = dt_util.utcnow()
+        start = (now - timedelta(days=days)).astimezone(tz).date()
+        end = now.astimezone(tz).date()
+        summary: dict[str, Any] = {}
+        for device in self.devices:
+            try:
+                rows = await self._async_drain_since_date(device.serial, start, end)
+            except ImbrrError as err:
+                _LOGGER.warning(
+                    "imbrr outflow model build failed for %s: %s", device.serial, err
+                )
+                summary[device.serial] = {"error": str(err)}
+                continue
+            model = fit_outflow_k(rows, fitted_at=now)
+            ledger = self.ledgers.setdefault(device.serial, DeviceLedger())
+            if model is None:
+                _LOGGER.warning(
+                    "imbrr %s: not enough clean refill data to fit an outflow "
+                    "model (%d readings over %d days)",
+                    device.serial,
+                    len(rows),
+                    days,
+                )
+                summary[device.serial] = {"fitted": False, "readings": len(rows)}
+                continue
+            ledger.outflow_model = model
+            _LOGGER.info(
+                "imbrr %s: fitted outflow model k=%.0f from %d clean samples",
+                device.serial,
+                model.k,
+                model.samples,
+            )
+            summary[device.serial] = {
+                "fitted": True,
+                "k": round(model.k, 1),
+                "samples": model.samples,
+                "capacitance_gal_per_psi_at_55": round(model.capacitance(55.0), 2),
+            }
+        self._schedule_save()
+        return summary
 
 
 def _coerce_float(value: Any) -> float | None:

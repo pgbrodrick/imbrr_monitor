@@ -15,6 +15,7 @@ from custom_components.imbrr.api import (
     ImbrrConnectionError,
     PumpCycle,
 )
+from custom_components.imbrr.outflow import OutflowModel
 from custom_components.imbrr.const import (
     DEFAULT_FAST_SCAN_INTERVAL,
     DEFAULT_SCAN_INTERVAL,
@@ -289,6 +290,71 @@ async def test_pump_cycle_counter(hass, mock_config_entry) -> None:
     # No cycles is a no-op.
     coordinator._count_new_pump_cycles(device, data, [])
     assert ledger.pump_cycles_total == 2
+
+
+def _refill_readings(uid: int, n: int, start_psi: float = 45.0):
+    rows = []
+    psi = start_psi
+    t = NOW
+    for i in range(n):
+        rows.append(make_reading(uid * 1000 + i, t, flow=6.0, psi=psi, unique_id=uid))
+        psi += 0.25
+        t += timedelta(seconds=5)
+    return rows
+
+
+async def test_build_outflow_model(hass, mock_config_entry) -> None:
+    api = make_mock_api()
+    rows = _refill_readings(1, 30) + _refill_readings(2, 30) + _refill_readings(3, 30)
+    api.async_get_readings_since_date.return_value = (rows, False)
+    coordinator = await make_coordinator(hass, mock_config_entry, api)
+
+    summary = await coordinator.async_build_outflow_model(30)
+
+    model = coordinator.ledgers[TEST_SERIAL].outflow_model
+    assert model is not None and model.k > 0
+    assert summary[TEST_SERIAL]["fitted"] is True
+    assert summary[TEST_SERIAL]["samples"] >= 40
+
+
+async def test_build_outflow_model_insufficient_data(hass, mock_config_entry) -> None:
+    api = make_mock_api()
+    api.async_get_readings_since_date.return_value = (_refill_readings(1, 5), False)
+    coordinator = await make_coordinator(hass, mock_config_entry, api)
+
+    summary = await coordinator.async_build_outflow_model(30)
+
+    assert coordinator.ledgers[TEST_SERIAL].outflow_model is None
+    assert summary[TEST_SERIAL]["fitted"] is False
+
+
+async def test_get_outflow(hass, mock_config_entry) -> None:
+    api = make_mock_api()
+    api.async_get_latest_depth.return_value = make_latest_depth(
+        reading_id=0, status="completed"
+    )
+    coordinator = await make_coordinator(hass, mock_config_entry, api)
+    coordinator.async_set_updated_data(await coordinator._async_update_data())
+
+    # No model yet -> None.
+    assert coordinator.get_outflow(TEST_SERIAL) is None
+
+    coordinator.ledgers[TEST_SERIAL].outflow_model = OutflowModel(k=88000.0, samples=100)
+    # Pump off, current pressure 55, falling ~0.3 psi/s (a draw).
+    coordinator.handle_mqtt_message(
+        f"imbrr/{TEST_SERIAL}/state",
+        '{"pressure_psi":55.0,"flow_gpm":0.0,"flow_event_status":"completed"}',
+    )
+    now = dt_util.utcnow()
+    coordinator._psi_buffer[TEST_SERIAL] = [
+        (now - timedelta(seconds=s), 55.0 + 0.3 * s) for s in (20, 15, 10, 5, 0)
+    ]
+
+    out = coordinator.get_outflow(TEST_SERIAL)
+    assert out is not None and out > 0
+    # Matches C(55) * 0.3.
+    model = coordinator.ledgers[TEST_SERIAL].outflow_model
+    assert out == pytest.approx(model.capacitance(55.0) * 0.3, rel=0.1)
 
 
 # ----------------------------------------------------------------------
